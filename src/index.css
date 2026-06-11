@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  
+  --color-crypto-dark: #09090b;
+  --color-crypto-bg: #070709;
+  --color-crypto-card: #0f0f13;
+  --color-crypto-border: #1f1f25;
+  --color-crypto-accent: #3b82f6;
+  --color-crypto-green: #10b981;
+  --color-crypto-red: #ef4444;
+  --color-crypto-yellow: #f59e0b;
+  --color-crypto-purple: #8b5cf6;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-crypto-bg);
+    color: #e4e4e7;
+    font-family: var(--font-sans);
+  }
+}
+
+/* Custom glowing effects */
+.glow-blue {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
+}
+
+.glow-green {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+.glow-purple {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+}
+
+.glow-red {
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.15);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f0f13;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}

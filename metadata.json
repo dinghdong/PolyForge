@@ -1,0 +1,6 @@
+{
+  "name": "PolyForge",
+  "description": "A No-Code AI Agent Launchpad for Polymarket. Assemble, authorize via MetaMask ERC-7715, and execute prediction strategies on smart accounts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
