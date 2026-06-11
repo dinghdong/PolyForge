@@ -88,10 +88,10 @@ sequenceDiagram
 
 | ID | Hypothesis | Track at stake | Status |
 |----|-----------|----------------|--------|
-| H1 | Relayer accepts `permissionContext` with ≥ 2 delegations (multi-hop chain) | Best A2A ($3k) | ⏳ |
-| H2 | A delegation granted to Agent A (7715 or signed root) can be re-delegated via `createDelegation` with parent authority, and the chain redeems | Best A2A | ⏳ |
-| H3 | EIP-7702 EOA→smart-account upgrade executes through the relayer | Best Use of Relayer ($1k) | ⏳ |
-| H4 | Webhook events arrive and verify against `/.well-known/jwks.json` (Ed25519) | Best Use of Relayer | ⏳ |
+| H1 | Relayer accepts `permissionContext` with ≥ 2 delegations (multi-hop chain) | Best A2A ($3k) | ✅ 2026-06-11 — `spike/01-probe-chain.ts`: 2-hop chain passes relayer validation; only fails at USDC balance simulation (unfunded account). Ordering is **leaf-first** (`[leaf, root]`); root-first is rejected explicitly. |
+| H2 | A delegation granted to Agent A (7715 or signed root) can be re-delegated via `createDelegation` with parent authority, and the chain redeems | Best A2A | ✅ structurally — EOA agent signs redelegation via standalone `signDelegation()`; narrower `scope` stacks on `parentDelegation`. SDK also exposes `parentPermissionContext` for redelegating straight from a 7715 grant context. On-chain redemption proof pending funding. |
+| H3 | EIP-7702 EOA→smart-account upgrade executes through the relayer | Best Use of Relayer ($1k) | ✅ structurally — `authorizationList` accepted by estimate in the same request. Only one entry allowed per request (per skill docs). On-chain proof pending funding. |
+| H4 | Webhook events arrive and verify against `/.well-known/jwks.json` (Ed25519) | Best Use of Relayer | ⏳ blocked on funding — requires a real `relayer_send7710Transaction`. User account needs Sepolia USDC (`0x1c7D…7238`, Circle faucet). |
 
 **Fallback ladder** (decision point: Saturday June 13, noon):
 
