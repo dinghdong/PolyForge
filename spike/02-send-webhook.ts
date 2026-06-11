@@ -200,7 +200,9 @@ async function buildBundle(feeAmount: bigint) {
     from: userSmartAccount.address,
     environment,
     salt: freshSalt(),
-    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: usdcAddress, maxAmount: parseUnits('1', 6) },
+    // root budget must cover relayer fee + work; testnet fees are steep (~6 USDC
+    // for 7702 upgrade + 2-hop redeem), so give the root ample headroom
+    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: usdcAddress, maxAmount: parseUnits('15', 6) },
   });
   const rootSigned = { ...root, signature: await userSmartAccount.signDelegation({ delegation: root }) };
 
@@ -246,19 +248,21 @@ async function buildBundle(feeAmount: bigint) {
   };
 }
 
-// estimate-first loop
+// estimate-first loop — converge on the relayer's required fee (it can drift
+// between estimates as gas prices move), re-signing the bundle each round
 let feeAmount = parseUnits('0.01', 6);
 let params = await buildBundle(feeAmount);
-let estimate = await rpc<Estimate7710Result>('relayer_estimate7710Transaction', params);
-if (!estimate.success) throw new Error(`estimate failed: ${estimate.error}`);
-const required = BigInt(estimate.requiredPaymentAmount!);
-if (required !== feeAmount) {
-  console.log(`fee adjusted ${formatUnits(feeAmount, 6)} → ${formatUnits(required, 6)} USDC, re-signing`);
+let estimate: Estimate7710Result | undefined;
+for (let attempt = 1; attempt <= 4; attempt++) {
+  estimate = await rpc<Estimate7710Result>('relayer_estimate7710Transaction', params);
+  if (!estimate.success) throw new Error(`estimate failed (attempt ${attempt}): ${estimate.error}`);
+  const required = BigInt(estimate.requiredPaymentAmount!);
+  if (required <= feeAmount) break;
+  console.log(`fee adjusted ${formatUnits(feeAmount, 6)} → ${formatUnits(required, 6)} USDC, re-signing (attempt ${attempt})`);
   feeAmount = required;
   params = await buildBundle(feeAmount);
-  estimate = await rpc<Estimate7710Result>('relayer_estimate7710Transaction', params);
-  if (!estimate.success) throw new Error(`re-estimate failed: ${estimate.error}`);
 }
+if (!estimate?.success) throw new Error('fee estimation did not converge in 4 attempts');
 console.log(`estimate ok: fee=${formatUnits(BigInt(estimate.requiredPaymentAmount!), 6)} USDC gasUsed=${JSON.stringify(estimate.gasUsed)}`);
 
 const taskId = await rpc<string>('relayer_send7710Transaction', {

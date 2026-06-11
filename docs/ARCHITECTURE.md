@@ -88,15 +88,17 @@ sequenceDiagram
 
 | ID | Hypothesis | Track at stake | Status |
 |----|-----------|----------------|--------|
-| H1 | Relayer accepts `permissionContext` with ≥ 2 delegations (multi-hop chain) | Best A2A ($3k) | ✅ 2026-06-11 — `spike/01-probe-chain.ts`: 2-hop chain passes relayer validation; only fails at USDC balance simulation (unfunded account). Ordering is **leaf-first** (`[leaf, root]`); root-first is rejected explicitly. |
-| H2 | A delegation granted to Agent A (7715 or signed root) can be re-delegated via `createDelegation` with parent authority, and the chain redeems | Best A2A | ✅ structurally — EOA agent signs redelegation via standalone `signDelegation()`; narrower `scope` stacks on `parentDelegation`. SDK also exposes `parentPermissionContext` for redelegating straight from a 7715 grant context. On-chain redemption proof pending funding. |
-| H3 | EIP-7702 EOA→smart-account upgrade executes through the relayer | Best Use of Relayer ($1k) | ✅ structurally — `authorizationList` accepted by estimate in the same request. Only one entry allowed per request (per skill docs). On-chain proof pending funding. |
-| H4 | Webhook events arrive and verify against `/.well-known/jwks.json` (Ed25519) | Best Use of Relayer | ⏳ blocked on funding — requires a real `relayer_send7710Transaction`. User account needs Sepolia USDC (`0x1c7D…7238`, Circle faucet). |
+| H1 | Relayer accepts `permissionContext` with ≥ 2 delegations (multi-hop chain) | Best A2A ($3k) | ✅ **proven on-chain 2026-06-11** — 2-hop chain `user → agentA → relayer target` redeemed in [Sepolia tx `0x72a9…7b5a`](https://sepolia.etherscan.io/tx/0x72a9546032e68db8680f5745031a0d8ddf413db7cf111aabbbc2744f57ae7b5a) (block 11035643, 482,479 gas). Ordering is **leaf-first** (`[leaf, root]`); root-first rejected with an explicit relayer error. |
+| H2 | A delegation granted to Agent A can be re-delegated via `createDelegation` + parent authority, and the chain redeems | Best A2A | ✅ proven — EOA agent signed the redelegation with standalone `signDelegation()`; executed in the same tx. SDK also exposes `parentPermissionContext` for redelegating straight from a 7715 grant context (the browser-flow path). |
+| H3 | EIP-7702 EOA→smart-account upgrade executes through the relayer | Best Use of Relayer ($1k) | ✅ proven — user EOA code is now `0xef0100…` (StatelessDeleGator), upgrade rode the same relayer tx, gas paid in USDC, account held **0 ETH throughout**. One `authorizationList` entry per request. |
+| H4 | Webhook events arrive and verify against `/.well-known/jwks.json` (Ed25519) | Best Use of Relayer | ✅ proven — 2/2 events (type 4 submitted → type 0 confirmed) received through a cloudflared tunnel and **Ed25519-verified** against the dev JWKS using sorted-key canonical JSON. `memo` correlation echoed on every event. |
 
-**Fallback ladder** (decision point: Saturday June 13, noon):
+**Spike findings worth designing around** (`spike/01-probe-chain.ts`, `spike/02-send-webhook.ts`):
 
-1. H1/H2 fail at depth 2 → single-hop redelegation `user → Agent A → relayer target` (still genuine ERC-7710 redelegation; A2A story survives).
-2. Redelegation entirely blocked → user grants A and B separately via 7715 (drop A2A track; keep Best Agent + Venice + Relayer).
+- **Caveat enforcement is real and per-hop**: when the relayer fee pushed total transfers past the root delegation's budget, the on-chain `ERC20TransferAmountEnforcer` reverted with `allowance-exceeded` at estimate time. This is the "hijacked AI can't exceed its budget" demo, observed live — keep it in the pitch.
+- **Testnet fee economics**: ~6.2 USDC per bundle (includes the one-time 7702 upgrade; later bundles are cheaper). One bundle can carry **multiple executions** (fee + N bets) — batch bets per bundle in the demo to stretch the faucet's 20 USDC / 2h.
+- **Fees drift between estimates** — converge with a re-sign loop (estimate → rebuild at `requiredPaymentAmount` → re-estimate, ≤4 rounds).
+- Zero-cost structural validation: `relayer_estimate7710Transaction` validates the full delegation chain before any funding — use it as the pre-flight check in the gateway.
 
 ## 6. Non-goals (hackathon)
 
