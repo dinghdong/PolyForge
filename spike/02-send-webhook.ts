@@ -167,7 +167,7 @@ await startWebhookServer(jwks);
 const tunnel = await startTunnel();
 
 const userSmartAccount = await toMetaMaskSmartAccount({
-  client: publicClient,
+  client: publicClient as never, // kit 1.6 typings lag viem 2.52 generics
   implementation: Implementation.Stateless7702,
   address: accounts.user.address,
   signer: { account: accounts.user },
@@ -183,7 +183,7 @@ const auth = await accounts.user.signAuthorization({
 });
 const authorizationList = [
   {
-    address: (auth as { address?: `0x${string}` }).address ?? auth.contractAddress,
+    address: auth.address,
     chainId: auth.chainId,
     nonce: auth.nonce,
     r: auth.r,
