@@ -181,6 +181,82 @@ export type BetIntent = {
 };
 
 /**
+ * Browser-mode bundle: root authority is the user's real ERC-7715 grant
+ * (delegate = agentA, erc20-token-periodic → transfers only). agentA
+ * redelegates via parentPermissionContext to the relayer target.
+ *   tx[0] (user chain):  [fee→collector, bet→market]   — pure USDC transfers
+ *   tx[1] (agentA chain): [recordBet(market)]          — agentA's own root
+ * The relayer merges both entries into one redeemDelegations batch.
+ */
+let agentASelfRoot: Delegation | undefined;
+export async function buildBrowserBetBundle(ctx: ChainContext, intent: BetIntent, feeAmount: bigint): Promise<SendParams> {
+  if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
+  const grant = getBrowserRoot();
+  if (!grant || grant.length === 0) throw new Error('no ERC-7715 permission context — sign in the Forge first');
+
+  const cap = feeAmount + intent.amountUsdc;
+  const leaf = createDelegation({
+    to: ctx.caps.targetAddress,
+    from: ctx.agentA.address,
+    environment: ctx.environment,
+    salt: freshSalt(),
+    parentPermissionContext: grant,
+    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: cap },
+  });
+  const leafSigned = await signAsAgent(ctx, leaf, 'SPIKE_AGENT_A_PK');
+
+  if (!agentASelfRoot) {
+    const selfRoot = createDelegation({
+      to: ctx.caps.targetAddress,
+      from: ctx.agentA.address, // agentA's own 7702 smart account (upgraded at deploy)
+      environment: ctx.environment,
+      salt: freshSalt(),
+      scope: {
+        type: ScopeType.FunctionCall,
+        targets: [ctx.market],
+        selectors: [SELECTORS.recordBet, SELECTORS.resolve],
+      },
+    });
+    agentASelfRoot = await signAsAgent(ctx, selfRoot, 'SPIKE_AGENT_A_PK');
+  }
+
+  return {
+    chainId: CHAIN_ID,
+    transactions: [
+      {
+        permissionContext: [toRelayerJson(leafSigned), ...grant.map((d) => toRelayerJson(d))],
+        executions: [
+          {
+            target: ctx.usdc,
+            value: '0',
+            data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.caps.feeCollector, feeAmount] }),
+          },
+          {
+            target: ctx.usdc,
+            value: '0',
+            data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.market, intent.amountUsdc] }),
+          },
+        ],
+      },
+      {
+        permissionContext: [toRelayerJson(agentASelfRoot)],
+        executions: [
+          {
+            target: ctx.market,
+            value: '0',
+            data: encodeFunctionData({
+              abi: MARKET_ABI,
+              functionName: 'recordBet',
+              args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc],
+            }),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/**
  * Build the full relayer bundle for one bet:
  * executions = [fee→feeCollector, USDC bet→market, recordBet(market)].
  * permissionContext ordering is leaf-first (spike-proven).

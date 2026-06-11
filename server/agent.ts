@@ -3,7 +3,7 @@
  * delegation bundle → relayer (gasless) → webhook/poll → position update.
  */
 import { formatUnits, parseUnits } from 'viem';
-import { buildBetBundle, type ChainContext } from './chain';
+import { buildBetBundle, buildBrowserBetBundle, getBrowserRoot, type ChainContext } from './chain';
 import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
 import type { MatchEvent } from './simulator';
@@ -86,12 +86,18 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   };
   upsertPosition(position);
 
-  const chainLabel = rail === 'star' ? 'user → AgentA → target (2-hop)' : 'user → AgentA → AgentB → target (3-hop)';
+  const browserMode = Boolean(getBrowserRoot());
+  const chainLabel = browserMode
+    ? 'ERC-7715 grant → AgentA → target (browser mode)'
+    : rail === 'star'
+      ? 'user → AgentA → target (2-hop)'
+      : 'user → AgentA → AgentB → target (3-hop)';
   pushLog('relayer', 'info', `building ${chainLabel} redelegation bundle — bet ${amountUsdc} USDC on outcome ${outcome}`);
 
   try {
+    const intent = { marketId: 0, outcome, amountUsdc: amount, bettor: ctx.userSmartAccount.address, viaFollower: rail === 'follower' } as const;
     const { taskId, feeAmount } = await estimateAndSend(
-      (fee) => buildBetBundle(ctx, { marketId: 0, outcome, amountUsdc: amount, bettor: ctx.userSmartAccount.address, viaFollower: rail === 'follower' }, fee),
+      (fee) => (browserMode ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
       parseUnits('0.01', 6),
       { destinationUrl: webhookUrl ? `${webhookUrl}/api/relayer-webhook` : undefined, memo: position.id },
     );

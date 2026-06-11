@@ -43,8 +43,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   restrictSell: true,
   forbidWithdrawal: true,
   relayerMode: '1shot',
-  gasAbstraction: true,
-  channelNonce: '0x0a (WC Arena Mode)'
+  gasAbstraction: true
 };
 
 export default function App() {
@@ -103,7 +102,7 @@ export default function App() {
                 PolyForge
                 <span className={`text-[8px] tracking-wider font-semibold rounded px-1.5 py-0.5 uppercase ${badgeClass}`}>Beta</span>
               </h1>
-              <p className="text-[9px] opacity-60 leading-none mt-1">Multi-2D Nonce Automation Studio</p>
+              <p className="text-[9px] opacity-60 leading-none mt-1">No-Code Agent Launchpad · ERC-7715 × ERC-7710 × 1Shot × Venice</p>
             </div>
           </div>
 
@@ -247,10 +246,10 @@ export default function App() {
                 <div className="space-y-1">
                   <div className="flex items-center gap-1 font-bold">
                     <span className="w-4 h-4 rounded-none flex items-center justify-center font-bold text-[9px] border-2 bg-purple-300 text-stone-950 border-stone-950">3</span>
-                    <span className="font-display uppercase tracking-tight">Gasless Parallel Relayer</span>
+                    <span className="font-display uppercase tracking-tight">Gasless 1Shot Relayer</span>
                   </div>
                   <p className="text-[11px] opacity-75 leading-relaxed font-sans pl-5">
-                    Broadcasted to chain via parallel Multi-2D channel nonce <strong className="font-mono">{config.channelNonce.split(' ')[0]}</strong>. Transaction sponsorship gas fee is {config.gasAbstraction ? <strong className="text-purple-600">Sponsored (0 Gas)</strong> : <strong className="opacity-50">Standard MATIC rules</strong>}.
+                    Agent A redelegates a narrowed ERC-7710 slice per bet; the 1Shot relayer redeems the chain on Sepolia. Gas is {config.gasAbstraction ? <strong className="text-purple-600">relayer-sponsored (user holds 0 ETH)</strong> : <strong className="opacity-50">paid by wallet in ETH</strong>}, status lands via Ed25519-signed webhooks.
                   </p>
                 </div>
 
@@ -306,7 +305,7 @@ export default function App() {
       <footer className="max-w-7xl mx-auto px-4 md:px-6 mt-16 pt-8 border-t border-current/10 text-center text-[11px] opacity-50 space-y-1 bg-transparent">
         <p className="font-display font-semibold uppercase tracking-wider">⚡ PolyForge Workspace • Secured No-Code Automated Margins Studio</p>
         <p className="font-mono text-[9px]">
-          Operational block node epoch: 19839401 • Polygon network: operational RPC • zero analytical queries log leaks.
+          Ethereum Sepolia (11155111) • gas: 1Shot relayer-sponsored, fees in USDC • AI: Venice (privacy-first, no logging)
         </p>
       </footer>
 
@@ -320,6 +319,7 @@ export default function App() {
         }}
         config={config}
         styleId={styleId}
+        copyTrade={activeCopiedAgent !== null}
       />
     </div>
   );

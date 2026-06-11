@@ -107,4 +107,18 @@ export class MatchSimulator extends EventEmitter {
     this.timer = undefined;
     this.running = false;
   }
+
+  /** Demo control: inject a goal right now (drives the "Aha" moment on cue). */
+  forceGoal(side: 'home' | 'away') {
+    if (!this.running) this.start();
+    if (side === 'home') {
+      this.score.home += 1;
+      this.odds = { home: Math.min(0.93, this.odds.home + 0.35), away: Math.max(0.03, this.odds.away - 0.3) };
+    } else {
+      this.score.away += 1;
+      this.odds = { home: Math.max(0.03, this.odds.home - 0.3), away: Math.min(0.93, this.odds.away + 0.35) };
+    }
+    const scorer = side === 'home' ? this.opts.teamHome : this.opts.teamAway;
+    this.emitEvent('goal', `GOAL! ${scorer} scores at ${this.minute}' — books repricing, momentary dislocation`);
+  }
 }

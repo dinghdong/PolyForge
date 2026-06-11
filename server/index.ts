@@ -13,8 +13,9 @@
 import { spawn } from 'node:child_process';
 import express from 'express';
 import { config as loadEnv } from 'dotenv';
+import { erc20Abi, formatUnits } from 'viem';
 import { decodeDelegations } from '@metamask/smart-accounts-kit/utils';
-import { initChainContext, getHeadlessRoot, setBrowserRoot, type ChainContext } from './chain';
+import { initChainContext, getHeadlessRoot, setBrowserRoot, publicClient, type ChainContext } from './chain';
 import { onMatchEvent, setWebhookUrl, applyConfirmation, findPositionByMemo } from './agent';
 import { verifyWebhook, type WebhookBody } from './relayer';
 import { MatchSimulator } from './simulator';
@@ -61,8 +62,38 @@ app.get('/api/telemetry', (req, res) => {
   });
 });
 
-app.get('/api/state', (_req, res) => {
-  res.json({ ...snapshot(), market: ctx.market, usdc: ctx.usdc, agentA: ctx.agentA.address, user: ctx.userSmartAccount.address });
+app.get('/api/state', async (_req, res) => {
+  let balanceUsdc: number | null = null;
+  try {
+    const raw = (await publicClient.readContract({
+      address: ctx.usdc,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [ctx.userSmartAccount.address],
+    })) as bigint;
+    balanceUsdc = Number(formatUnits(raw, 6));
+  } catch {
+    /* RPC hiccup — frontend shows last known */
+  }
+  res.json({
+    ...snapshot(),
+    market: ctx.market,
+    usdc: ctx.usdc,
+    agentA: ctx.agentA.address,
+    user: ctx.userSmartAccount.address,
+    balanceUsdc,
+  });
+});
+
+app.post('/api/sim/event', (req, res) => {
+  const type = String(req.body?.type ?? '');
+  if (type === 'goal-home') simulator.forceGoal('home');
+  else if (type === 'goal-away') simulator.forceGoal('away');
+  else {
+    res.status(400).json({ ok: false, error: 'type must be goal-home | goal-away' });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 app.post('/api/agents', (req, res) => {

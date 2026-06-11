@@ -22,7 +22,6 @@ export interface AgentConfig {
   forbidWithdrawal: boolean;
   relayerMode: RelayerMode;
   gasAbstraction: boolean;
-  channelNonce: string;
 }
 
 export interface SimulationStats {
