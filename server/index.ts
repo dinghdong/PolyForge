@@ -157,7 +157,7 @@ app.post('/api/relayer-webhook', async (req, res) => {
   pushLog('relayer', body.type === 1 ? 'error' : 'success', `webhook ✓ Ed25519-verified — ${label} (memo ${body.data?.memo ?? '-'})`);
   const position = findPositionByMemo(body.data?.memo);
   if (position) {
-    if (body.type === 0) applyConfirmation(position, body.data?.receipt?.transactionHash);
+    if (body.type === 0) void applyConfirmation(ctx, position, body.data?.receipt?.transactionHash);
     if (body.type === 1) {
       position.status = 'FAILED';
       pushLog('contract', 'error', `bundle reverted on-chain (memo ${body.data?.memo})`);

@@ -3,7 +3,7 @@
  * delegation bundle → relayer (gasless) → webhook/poll → position update.
  */
 import { formatUnits, parseUnits } from 'viem';
-import { buildBetBundle, buildBrowserBetBundle, getBrowserRoot, type ChainContext } from './chain';
+import { buildBetBundle, buildBrowserBetBundle, getBrowserRoot, recordBetDirect, type ChainContext } from './chain';
 import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
 import type { MatchEvent } from './simulator';
@@ -76,6 +76,8 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   const amount = parseUnits(String(amountUsdc), 6);
   const position: Position = {
     id: `pos-${++positionSeq}`,
+    marketId: 0,
+    outcomeIndex: outcome,
     marketName: `${event.teamHome} vs ${event.teamAway}`,
     selectedOutcome: outcome === 0 ? 'YES' : 'NO',
     betAmountUsdc: amountUsdc,
@@ -104,7 +106,7 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
     position.taskId = taskId;
     pushLog('relayer', 'success', `task ${taskId.slice(0, 18)}… submitted (fee ${formatUnits(feeAmount, 6)} USDC, gas: relayer-sponsored)`);
 
-    if (!webhookUrl) void pollUntilTerminal(taskId, position);
+    if (!webhookUrl) void pollUntilTerminal(ctx, taskId, position);
     addSpent(amountUsdc);
   } catch (e) {
     position.status = 'FAILED';
@@ -113,13 +115,13 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   }
 }
 
-async function pollUntilTerminal(taskId: string, position: Position) {
+async function pollUntilTerminal(ctx: ChainContext, taskId: string, position: Position) {
   for (let i = 0; i < 45; i++) {
     await new Promise((r) => setTimeout(r, 4000));
     try {
       const st = await getStatus(taskId);
       if (st.status === 200) {
-        applyConfirmation(position, st.receipt?.transactionHash);
+        await applyConfirmation(ctx, position, st.receipt?.transactionHash);
         return;
       }
       if (st.status >= 400) {
@@ -134,15 +136,30 @@ async function pollUntilTerminal(taskId: string, position: Position) {
   }
 }
 
-export function applyConfirmation(position: Position, txHash?: string) {
+export async function applyConfirmation(ctx: ChainContext, position: Position, txHash?: string) {
+  if (position.status === 'OPEN') return; // webhook + poll can race; idempotent
   position.status = 'OPEN';
   position.txHash = txHash;
   upsertPosition(position);
   pushLog(
     'contract',
     'success',
-    `bet confirmed on-chain${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user native gas cost: 0)`,
+    `budget transfer confirmed${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user native gas cost: 0)`,
   );
+  // attribute the received USDC to a market position (operator call, agentA pays its own gas)
+  try {
+    const recordTx = await recordBetDirect(ctx, {
+      marketId: position.marketId,
+      outcome: position.outcomeIndex,
+      amountUsdc: parseUnits(String(position.betAmountUsdc), 6),
+      bettor: ctx.userSmartAccount.address,
+    });
+    position.recordTxHash = recordTx;
+    upsertPosition(position);
+    pushLog('contract', 'success', `position recorded on MockPredictionMarket — https://sepolia.etherscan.io/tx/${recordTx}`);
+  } catch (e) {
+    pushLog('contract', 'error', `recordBet failed: ${(e as Error).message}`);
+  }
 }
 
 export function findPositionByMemo(memo?: string): Position | undefined {

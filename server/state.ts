@@ -19,6 +19,8 @@ export type TelemetryLog = {
 export type Position = {
   id: string;
   betId?: number;
+  marketId: number;
+  outcomeIndex: 0 | 1;
   marketName: string;
   selectedOutcome: 'YES' | 'NO';
   betAmountUsdc: number;
@@ -27,6 +29,7 @@ export type Position = {
   status: 'PENDING' | 'OPEN' | 'WON' | 'LOST' | 'FAILED';
   taskId?: string;
   txHash?: string;
+  recordTxHash?: string;
   rail: 'star' | 'follower';
 };
 

@@ -23,11 +23,13 @@ import {
 } from '@metamask/smart-accounts-kit';
 import {
   createPublicClient,
+  createWalletClient,
   encodeFunctionData,
   erc20Abi,
   getAddress,
   http,
   parseAbi,
+  parseUnits,
   toFunctionSelector,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -104,9 +106,10 @@ async function signAsAgent(
 }
 
 /**
- * Headless root: user SA delegates broad-but-bounded authority to agentA —
- * USDC transfers + market calls only. Cached per server run (one signature),
- * like a session the user granted once.
+ * Headless root: user SA delegates a USDC budget to agentA — transfers only,
+ * capped. Mirrors the semantics of a browser ERC-7715 erc20-periodic grant
+ * (the user's authority never extends beyond moving budgeted USDC).
+ * Cached per server run (one signature), like a session the user granted once.
  */
 let headlessRoot: Delegation | undefined;
 export async function getHeadlessRoot(ctx: ChainContext): Promise<Delegation> {
@@ -117,14 +120,49 @@ export async function getHeadlessRoot(ctx: ChainContext): Promise<Delegation> {
     from: ctx.userSmartAccount.address,
     environment: ctx.environment,
     salt: freshSalt(),
-    scope: {
-      type: ScopeType.FunctionCall,
-      targets: [ctx.usdc, ctx.market],
-      selectors: [SELECTORS.transfer, SELECTORS.recordBet, SELECTORS.resolve, SELECTORS.claim, SELECTORS.createMarket],
-    },
+    // budget ceiling, not target spend — Sepolia relayer fees swing 6-22 USDC
+    // with testnet gas price, so leave generous headroom above fee+bet
+    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: parseUnits('30', 6) },
   });
   headlessRoot = { ...root, signature: await ctx.userSmartAccount.signDelegation({ delegation: root }) };
   return headlessRoot;
+}
+
+/**
+ * Operator calls (recordBet / resolve) are backend ops paid by agentA's own
+ * ETH as plain transactions — routing them through the relayer tripled the
+ * bundle gas (700k vs 490k) and the testnet fee (22 vs ~6 USDC). The USER
+ * money rail stays 100% relayer-redeemed and gasless.
+ */
+const operatorWallet = (ctx: ChainContext) =>
+  createWalletClient({ chain: CHAIN, transport: http(), account: ctx.agentA });
+
+export async function recordBetDirect(ctx: ChainContext, intent: BetIntent): Promise<`0x${string}`> {
+  if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
+  const hash = await operatorWallet(ctx).writeContract({
+    chain: CHAIN,
+    account: ctx.agentA,
+    address: ctx.market,
+    abi: MARKET_ABI,
+    functionName: 'recordBet',
+    args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return hash;
+}
+
+export async function resolveDirect(ctx: ChainContext, marketId: number, winner: 0 | 1): Promise<`0x${string}`> {
+  if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
+  const hash = await operatorWallet(ctx).writeContract({
+    chain: CHAIN,
+    account: ctx.agentA,
+    address: ctx.market,
+    abi: MARKET_ABI,
+    functionName: 'resolve',
+    args: [BigInt(marketId), winner],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return hash;
 }
 
 /** Browser root: the decoded ERC-7715 permission context granted to agentA. */
@@ -188,7 +226,6 @@ export type BetIntent = {
  *   tx[1] (agentA chain): [recordBet(market)]          — agentA's own root
  * The relayer merges both entries into one redeemDelegations batch.
  */
-let agentASelfRoot: Delegation | undefined;
 export async function buildBrowserBetBundle(ctx: ChainContext, intent: BetIntent, feeAmount: bigint): Promise<SendParams> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
   const grant = getBrowserRoot();
@@ -204,21 +241,6 @@ export async function buildBrowserBetBundle(ctx: ChainContext, intent: BetIntent
     scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: cap },
   });
   const leafSigned = await signAsAgent(ctx, leaf, 'SPIKE_AGENT_A_PK');
-
-  if (!agentASelfRoot) {
-    const selfRoot = createDelegation({
-      to: ctx.caps.targetAddress,
-      from: ctx.agentA.address, // agentA's own 7702 smart account (upgraded at deploy)
-      environment: ctx.environment,
-      salt: freshSalt(),
-      scope: {
-        type: ScopeType.FunctionCall,
-        targets: [ctx.market],
-        selectors: [SELECTORS.recordBet, SELECTORS.resolve],
-      },
-    });
-    agentASelfRoot = await signAsAgent(ctx, selfRoot, 'SPIKE_AGENT_A_PK');
-  }
 
   return {
     chainId: CHAIN_ID,
@@ -238,28 +260,19 @@ export async function buildBrowserBetBundle(ctx: ChainContext, intent: BetIntent
           },
         ],
       },
-      {
-        permissionContext: [toRelayerJson(agentASelfRoot)],
-        executions: [
-          {
-            target: ctx.market,
-            value: '0',
-            data: encodeFunctionData({
-              abi: MARKET_ABI,
-              functionName: 'recordBet',
-              args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc],
-            }),
-          },
-        ],
-      },
     ],
   };
 }
 
 /**
- * Build the full relayer bundle for one bet:
- * executions = [fee→feeCollector, USDC bet→market, recordBet(market)].
- * permissionContext ordering is leaf-first (spike-proven).
+ * Relayer bundle for one bet — user budget chain only, pure USDC transfers
+ * (Erc20TransferAmount caveats at every hop, spike-proven shape):
+ *   [fee→feeCollector, bet→market]
+ *
+ * recordBet attribution happens afterwards via `recordBetDirect` (agentA's
+ * own ETH): a non-transfer call under a transfer-amount enforcer reverts
+ * with `invalid-execution-length`, and a second relayer entry for it tripled
+ * the fee. permissionContext ordering is leaf-first.
  */
 export async function buildBetBundle(ctx: ChainContext, intent: BetIntent, feeAmount: bigint): Promise<SendParams> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
@@ -275,46 +288,11 @@ export async function buildBetBundle(ctx: ChainContext, intent: BetIntent, feeAm
     permissionContext = [toRelayerJson(leaf), toRelayerJson(root)];
   }
 
-  const executions = [
-    {
-      target: ctx.usdc,
-      value: '0',
-      data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.caps.feeCollector, feeAmount] }),
-    },
-    {
-      target: ctx.usdc,
-      value: '0',
-      data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.market, intent.amountUsdc] }),
-    },
-    {
-      target: ctx.market,
-      value: '0',
-      data: encodeFunctionData({
-        abi: MARKET_ABI,
-        functionName: 'recordBet',
-        args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc],
-      }),
-    },
-  ];
-
-  return { chainId: CHAIN_ID, transactions: [{ permissionContext, executions }] };
-}
-
-/** Market admin op (resolve) routed through the same headless chain. */
-export async function buildResolveBundle(
-  ctx: ChainContext,
-  marketId: number,
-  winner: 0 | 1,
-  feeAmount: bigint,
-): Promise<SendParams> {
-  if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
-  const root = await getHeadlessRoot(ctx);
-  const leaf = await redelegateToTarget(ctx, root, feeAmount);
   return {
     chainId: CHAIN_ID,
     transactions: [
       {
-        permissionContext: [toRelayerJson(leaf), toRelayerJson(root)],
+        permissionContext,
         executions: [
           {
             target: ctx.usdc,
@@ -322,9 +300,9 @@ export async function buildResolveBundle(
             data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.caps.feeCollector, feeAmount] }),
           },
           {
-            target: ctx.market,
+            target: ctx.usdc,
             value: '0',
-            data: encodeFunctionData({ abi: MARKET_ABI, functionName: 'resolve', args: [BigInt(marketId), winner] }),
+            data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.market, intent.amountUsdc] }),
           },
         ],
       },

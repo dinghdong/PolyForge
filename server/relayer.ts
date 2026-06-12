@@ -85,8 +85,11 @@ export async function estimateAndSend(
   let estimate: Estimate7710Result | undefined;
   for (let round = 1; round <= (opts.maxRounds ?? 4); round++) {
     estimate = await rpc<Estimate7710Result>('relayer_estimate7710Transaction', params);
-    if (!estimate.success) throw new Error(`estimate failed (round ${round}): ${estimate.error}`);
+    if (!estimate.success) {
+      throw new Error(`estimate failed (round ${round}, fee=${feeAmount}): ${estimate.error}`);
+    }
     const required = BigInt(estimate.requiredPaymentAmount!);
+    console.log(`[relayer] estimate round ${round}: fee=${feeAmount} required=${required} gas=${JSON.stringify(estimate.gasUsed)}`);
     if (required <= feeAmount) break;
     feeAmount = required;
     params = await build(feeAmount);
