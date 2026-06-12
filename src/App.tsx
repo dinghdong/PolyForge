@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Sparkles, 
   Layers, 
@@ -56,11 +56,22 @@ export default function App() {
   const styleId: StyleId = 'brutalist'; // Default style is Brutalist (Neo-Brutalist)
   const [activeCopiedAgent, setActiveCopiedAgent] = useState<string | null>(null);
 
+  // restore connection state on reload + follow account switches made in MetaMask
+  useEffect(() => {
+    let unsubscribe = () => {};
+    void import('./lib/wallet').then(({ getConnectedAccount, onAccountsChanged }) => {
+      void getConnectedAccount().then((addr) => addr && setWalletAddress(addr));
+      unsubscribe = onAccountsChanged(setWalletAddress);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const handleConnectWallet = async () => {
     setWalletError('');
     try {
-      const { connectWallet, ensureSepolia } = await import('./lib/wallet');
-      const address = await connectWallet();
+      const { connectWallet, switchAccount, ensureSepolia } = await import('./lib/wallet');
+      // already connected → force the account picker instead of a silent no-op
+      const address = walletAddress ? await switchAccount() : await connectWallet();
       await ensureSepolia();
       setWalletAddress(address);
     } catch (e) {
@@ -153,7 +164,7 @@ export default function App() {
               className={`flex items-center gap-2 px-3.5 py-1.5 transition-all text-xs font-mono font-bold cursor-pointer border-2 shadow-[2px_2px_0px_#000] rounded-none border-stone-950 ${
                 walletAddress ? 'bg-white text-stone-950' : 'bg-[#fae155] hover:bg-[#ebd01c] text-stone-950'
               }`}
-              title={walletAddress ? 'Connected to Sepolia' : 'Connect MetaMask (Sepolia)'}
+              title={walletAddress ? 'Click to switch account' : 'Connect MetaMask (Sepolia)'}
             >
               <Wallet className="w-3.5 h-3.5 text-blue-500" />
               <span>{walletAddress ? formatAddress(walletAddress) : 'Connect Wallet'}</span>

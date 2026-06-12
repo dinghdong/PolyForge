@@ -34,6 +34,42 @@ export async function connectWallet(): Promise<`0x${string}`> {
   return accounts[0];
 }
 
+/** Already-connected silent check (no popup) — restores state after reload. */
+export async function getConnectedAccount(): Promise<`0x${string}` | null> {
+  try {
+    const eth = getEthereum();
+    const accounts = (await eth.request({ method: 'eth_accounts' })) as `0x${string}`[];
+    return accounts?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Force the MetaMask account picker even when already connected. */
+export async function switchAccount(): Promise<`0x${string}`> {
+  const eth = getEthereum();
+  await eth.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] });
+  const accounts = (await eth.request({ method: 'eth_requestAccounts' })) as `0x${string}`[];
+  if (!accounts?.[0]) throw new Error('wallet returned no account');
+  return accounts[0];
+}
+
+/** Track account switches made inside the MetaMask UI. Returns unsubscribe. */
+export function onAccountsChanged(cb: (address: `0x${string}` | null) => void): () => void {
+  try {
+    const eth = getEthereum() as Eip1193 & {
+      on?: (event: string, handler: (accounts: `0x${string}`[]) => void) => void;
+      removeListener?: (event: string, handler: (accounts: `0x${string}`[]) => void) => void;
+    };
+    if (!eth.on) return () => {};
+    const handler = (accounts: `0x${string}`[]) => cb(accounts?.[0] ?? null);
+    eth.on('accountsChanged', handler);
+    return () => eth.removeListener?.('accountsChanged', handler);
+  } catch {
+    return () => {};
+  }
+}
+
 export async function ensureSepolia(): Promise<void> {
   const eth = getEthereum();
   const chainId = (await eth.request({ method: 'eth_chainId' })) as string;
