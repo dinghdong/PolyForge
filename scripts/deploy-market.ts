@@ -7,7 +7,7 @@
  *
  * Writes MARKET_ADDRESS to .env.local on success.
  */
-import { readFileSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { createWalletClient, formatEther, getAddress, http, parseAbi } from 'viem';
 import { getSmartAccountsEnvironment } from '@metamask/smart-accounts-kit';
 import { CHAIN, CHAIN_ID, publicClient, requireAccounts, getCaps } from '../spike/lib';
@@ -68,19 +68,25 @@ const marketAbi = parseAbi([
   'function createMarket(string question, string outcomeA, string outcomeB, uint64 closesAt) returns (uint256)',
   'function marketCount() view returns (uint256)',
 ]);
-const closesAt = BigInt(Math.floor(Date.now() / 1000) + 5 * 24 * 3600);
+const closesAt = BigInt(Math.floor(Date.now() / 1000) + 30 * 24 * 3600);
 const seedHash = await wallet.writeContract({
   chain: CHAIN,
   account: accounts.agentA,
   address: market,
   abi: marketAbi,
   functionName: 'createMarket',
-  args: ['World Cup 2026 Group C: Brazil vs Germany — who wins?', 'Brazil', 'Germany', closesAt],
+  // mirrors the live Polymarket market our Gamma feed tracks
+  args: ['Will Brazil win the 2026 FIFA World Cup? (mirrors Polymarket)', 'Yes', 'No', closesAt],
 });
 await publicClient.waitForTransactionReceipt({ hash: seedHash });
 const count = await publicClient.readContract({ address: market, abi: marketAbi, functionName: 'marketCount' });
 console.log(`seeded market #0 (markets=${count})`);
 
-appendFileSync('.env.local', `\nMARKET_ADDRESS=${market}\n`);
-console.log(`\nMARKET_ADDRESS=${market} → appended to .env.local`);
+// replace (not append) — dotenv keeps the FIRST occurrence it sees
+const envPath = '.env.local';
+const env = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+const line = `MARKET_ADDRESS=${market}`;
+const next = env.match(/^MARKET_ADDRESS=.*$/m) ? env.replace(/^MARKET_ADDRESS=.*$/gm, line) : `${env}\n${line}\n`;
+writeFileSync(envPath, next);
+console.log(`\n${line} → written to .env.local`);
 console.log(`explorer: https://sepolia.etherscan.io/address/${market}`);

@@ -45,11 +45,11 @@ export const publicClient = createPublicClient({ chain: CHAIN, transport: http()
 
 export const MARKET_ABI = parseAbi([
   'function createMarket(string question, string outcomeA, string outcomeB, uint64 closesAt) returns (uint256)',
-  'function recordBet(address bettor, uint64 marketId, uint8 outcome, uint128 amount) returns (uint256)',
+  'function recordBet(address bettor, uint64 marketId, uint8 outcome, uint128 amount, uint64 entryPriceE6) returns (uint256)',
   'function resolve(uint64 marketId, uint8 winner)',
   'function claim(uint256 betId)',
   'function markets(uint256) view returns (string question, string outcomeA, string outcomeB, uint64 closesAt, bool resolved, uint8 winner, uint128 poolA, uint128 poolB)',
-  'function bets(uint256) view returns (address bettor, uint64 marketId, uint8 outcome, bool claimed, uint128 amount)',
+  'function bets(uint256) view returns (address bettor, uint64 marketId, uint8 outcome, bool claimed, uint128 amount, uint64 entryPriceE6)',
   'function marketCount() view returns (uint256)',
   'function betCount() view returns (uint256)',
 ]);
@@ -148,7 +148,7 @@ export async function recordBetDirect(ctx: ChainContext, intent: BetIntent): Pro
     address: ctx.market,
     abi: MARKET_ABI,
     functionName: 'recordBet',
-    args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc],
+    args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc, intent.entryPriceE6],
   });
   await publicClient.waitForTransactionReceipt({ hash });
   return hash;
@@ -224,6 +224,7 @@ export type BetIntent = {
   marketId: number;
   outcome: 0 | 1;
   amountUsdc: bigint; // 6 decimals
+  entryPriceE6: bigint; // share price at entry, micro-USDC (live Polymarket quote)
   bettor: `0x${string}`;
   viaFollower?: boolean; // 3-hop copy-trade rail
 };

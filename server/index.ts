@@ -19,6 +19,7 @@ import { initChainContext, getHeadlessRoot, setBrowserRoot, getBrowserDelegator,
 import { onMatchEvent, setWebhookUrl, applyConfirmation, findPositionByMemo } from './agent';
 import { verifyWebhook, type WebhookBody } from './relayer';
 import { MatchSimulator } from './simulator';
+import { startPolymarketFeed, getPolymarketState } from './polymarket';
 import {
   getAgentConfig,
   pushLog,
@@ -129,7 +130,7 @@ app.post('/api/agents/activate', async (req, res) => {
       pushLog('guardrail', 'success', `ERC-7715 permission received — delegate=${decoded[0]?.delegate?.slice(0, 10)}… caveats=${decoded[0]?.caveats?.length}`);
     } else {
       const root = await getHeadlessRoot(ctx);
-      pushLog('guardrail', 'success', `headless session delegation signed by user smart account (${root.caveats.length} caveat(s): allowed-targets+methods on USDC + market)`);
+      pushLog('guardrail', 'success', `headless session delegation signed by user smart account (${root.caveats.length} caveat(s): USDC transfer budget, 30 USDC ceiling)`);
     }
     setAgentActive(true);
     if (!simulator.running) simulator.start();
@@ -175,6 +176,7 @@ app.get('/api/health', (_req, res) => {
     relayerTarget: ctx.caps.targetAddress,
     veniceKey: Boolean(process.env.VENICE_API_KEY),
     webhookMode: Boolean(process.env.WEBHOOK_PUBLIC_URL) || undefined,
+    polymarket: getPolymarketState() ?? null,
   });
 });
 
@@ -208,6 +210,7 @@ async function startTunnel(): Promise<string | undefined> {
 ctx = await initChainContext();
 const tunnelUrl = await startTunnel();
 setWebhookUrl(tunnelUrl);
+startPolymarketFeed(simulator);
 
 app.listen(PORT, () => {
   pushLog('system', 'info', `PolyForge server on :${PORT} — market=${ctx.market ?? 'NOT DEPLOYED (dry betting disabled)'}`);

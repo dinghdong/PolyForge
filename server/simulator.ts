@@ -14,6 +14,7 @@ export type MatchEvent = {
   scoreAway: number;
   description: string;
   odds: { home: number; away: number }; // implied probabilities, sum < 1 (vig)
+  oddsSource?: string; // set when a real feed (Polymarket) owns the odds layer
 };
 
 export type SimulatorOptions = {
@@ -29,6 +30,10 @@ export class MatchSimulator extends EventEmitter {
   private minute = 0;
   private score = { home: 0, away: 0 };
   private odds = { home: 0.44, away: 0.36 };
+  /** when set, a real external feed (Polymarket) owns the odds layer */
+  private externalSource?: string;
+  /** manual goal shocks freeze external updates briefly for demo determinism */
+  private suppressExternalUntil = 0;
   running = false;
 
   constructor(opts: SimulatorOptions = {}) {
@@ -51,8 +56,22 @@ export class MatchSimulator extends EventEmitter {
       scoreAway: this.score.away,
       description,
       odds: { ...this.odds },
+      oddsSource: this.externalSource,
     };
     this.emit('event', e);
+  }
+
+  /** Real price feed (Polymarket) takes over the odds layer. */
+  setExternalOdds(home: number, away: number, sourceLabel: string) {
+    if (Date.now() < this.suppressExternalUntil) return;
+    const clamp = (x: number) => Math.min(0.99, Math.max(0.01, x));
+    const next = { home: clamp(home), away: clamp(away) };
+    const moved = Math.abs(next.home - this.odds.home) >= 0.005;
+    this.odds = next;
+    this.externalSource = sourceLabel;
+    if (moved && this.running) {
+      this.emitEvent('odds-shift', `Books reprice (live): implied ${next.home.toFixed(3)} / ${next.away.toFixed(3)}`);
+    }
   }
 
   start() {
@@ -60,7 +79,8 @@ export class MatchSimulator extends EventEmitter {
     this.running = true;
     this.minute = 0;
     this.score = { home: 0, away: 0 };
-    this.odds = { home: 0.44, away: 0.36 };
+    // don't clobber a live external feed's odds with simulator defaults
+    if (!this.externalSource) this.odds = { home: 0.44, away: 0.36 };
     this.emitEvent('kickoff', `Kickoff: ${this.opts.teamHome} vs ${this.opts.teamAway} (Group C, World Cup 2026)`);
 
     this.timer = setInterval(() => {
@@ -86,12 +106,14 @@ export class MatchSimulator extends EventEmitter {
         return;
       }
 
-      // gentle drift + periodic talking points
-      const drift = (Math.random() - 0.5) * 0.02;
-      this.odds = {
-        home: Math.min(0.9, Math.max(0.05, this.odds.home + drift)),
-        away: Math.min(0.9, Math.max(0.05, this.odds.away - drift)),
-      };
+      // gentle drift only when no external feed owns the odds
+      if (!this.externalSource) {
+        const drift = (Math.random() - 0.5) * 0.02;
+        this.odds = {
+          home: Math.min(0.9, Math.max(0.05, this.odds.home + drift)),
+          away: Math.min(0.9, Math.max(0.05, this.odds.away - drift)),
+        };
+      }
       if (this.minute % 15 === 0) {
         this.emitEvent('odds-shift', `Books reprice at ${this.minute}' — implied ${this.opts.teamHome} ${this.odds.home.toFixed(2)} / ${this.opts.teamAway} ${this.odds.away.toFixed(2)}`);
       } else if (this.minute % 7 === 0) {
@@ -108,9 +130,12 @@ export class MatchSimulator extends EventEmitter {
     this.running = false;
   }
 
-  /** Demo control: inject a goal right now (drives the "Aha" moment on cue). */
+  /** Demo control: inject a goal right now (drives the "Aha" moment on cue).
+   *  Shocks the odds locally and suppresses the external feed for 60s so the
+   *  dislocation is visible regardless of live market quiet. */
   forceGoal(side: 'home' | 'away') {
     if (!this.running) this.start();
+    this.suppressExternalUntil = Date.now() + 60_000;
     if (side === 'home') {
       this.score.home += 1;
       this.odds = { home: Math.min(0.93, this.odds.home + 0.35), away: Math.max(0.03, this.odds.away - 0.3) };

@@ -13,17 +13,31 @@ type JsonRpc<T> =
   | { jsonrpc: '2.0'; id: number | string; error: { code: number; message: string; data?: unknown } };
 
 export async function rpc<T>(method: string, params: unknown, id = 1): Promise<T> {
-  const res = await fetch(RELAYER_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-  });
-  const json = (await res.json()) as JsonRpc<T>;
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(json)}`);
-  if ('error' in json) {
-    throw new Error(`[${json.error.code}] ${json.error.message} ${JSON.stringify(json.error.data ?? '')}`);
+  // transient network failures shouldn't kill a bet — retry fetch-level
+  // errors (JSON-RPC errors are NOT retried; they're real answers)
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(RELAYER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+      });
+      const json = (await res.json()) as JsonRpc<T>;
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(json)}`);
+      if ('error' in json) {
+        throw new Error(`[${json.error.code}] ${json.error.message} ${JSON.stringify(json.error.data ?? '')}`);
+      }
+      return json.result;
+    } catch (e) {
+      const msg = (e as Error).message ?? '';
+      const isNetwork = /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket/i.test(msg);
+      if (!isNetwork || attempt === 3) throw e;
+      lastError = e as Error;
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
   }
-  return json.result;
+  throw lastError ?? new Error('rpc failed');
 }
 
 export function toRelayerJson(value: unknown): unknown {

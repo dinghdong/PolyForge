@@ -34,7 +34,8 @@ contract MockPredictionMarket {
         uint64 marketId;
         uint8 outcome;
         bool claimed;
-        uint128 amount;
+        uint128 amount;       // USDC paid in (6 decimals)
+        uint64 entryPriceE6;  // price per share at entry, micro-USDC (Polymarket-style)
     }
 
     Market[] public markets;
@@ -82,23 +83,27 @@ contract MockPredictionMarket {
     }
 
     /// @notice Attribute USDC already transferred to this contract to a bet.
+    /// @param entryPriceE6 share price at entry (micro-USDC, mirrors the live
+    ///        Polymarket quote): shares = amount / price, winners redeem $1/share.
     function recordBet(
         address bettor,
         uint64 marketId,
         uint8 outcome,
-        uint128 amount
+        uint128 amount,
+        uint64 entryPriceE6
     ) external onlyOperator returns (uint256 betId) {
         Market storage m = markets[marketId];
         require(!m.resolved && block.timestamp < m.closesAt, "market closed");
         require(outcome < 2, "bad outcome");
         require(amount > 0, "zero amount");
+        require(entryPriceE6 > 0 && entryPriceE6 <= 1e6, "bad price");
         require(usdc.balanceOf(address(this)) >= attributed + amount, "funds not received");
 
         attributed += amount;
         if (outcome == 0) m.poolA += amount;
         else m.poolB += amount;
 
-        bets.push(Bet(bettor, marketId, outcome, false, amount));
+        bets.push(Bet(bettor, marketId, outcome, false, amount, entryPriceE6));
         betId = bets.length - 1;
         emit BetRecorded(betId, marketId, bettor, outcome, amount);
     }
@@ -112,7 +117,9 @@ contract MockPredictionMarket {
         emit MarketResolved(marketId, winner);
     }
 
-    /// @notice Parimutuel claim: winning bet takes its share of both pools.
+    /// @notice Fixed-price claim (Polymarket economics): each winning share
+    /// redeems for $1 — payout = amount / entryPrice. Funded by the pooled
+    /// stakes; demo-grade counterparty (the pool) is disclosed in the README.
     function claim(uint256 betId) external {
         Bet storage bet = bets[betId];
         Market storage m = markets[bet.marketId];
@@ -121,9 +128,7 @@ contract MockPredictionMarket {
         require(bet.outcome == m.winner, "lost");
 
         bet.claimed = true;
-        uint256 winnerPool = m.winner == 0 ? m.poolA : m.poolB;
-        uint256 totalPool = uint256(m.poolA) + uint256(m.poolB);
-        uint256 payout = (uint256(bet.amount) * totalPool) / winnerPool;
+        uint256 payout = (uint256(bet.amount) * 1e6) / bet.entryPriceE6;
 
         uint256 release = payout > attributed ? attributed : payout;
         attributed -= release;

@@ -14,6 +14,7 @@ export type ServerMatch = {
   scoreAway: number;
   description: string;
   odds: { home: number; away: number };
+  oddsSource?: string;
 };
 
 export type ServerPosition = {

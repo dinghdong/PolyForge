@@ -84,6 +84,10 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   // in browser mode the bettor (and the wallet whose USDC moves) is the
   // real account that granted the 7715 permission
   const bettor = getBrowserDelegator() ?? ctx.userSmartAccount.address;
+  // entry price = current implied probability for the chosen outcome
+  // (live Polymarket quote when the feed owns the odds layer)
+  const entryOdds = outcome === 0 ? event.odds.home : event.odds.away;
+  const entryPriceE6 = BigInt(Math.min(990_000, Math.max(10_000, Math.round(entryOdds * 1e6))));
   const position: Position = {
     id: `pos-${++positionSeq}`,
     marketId: 0,
@@ -92,7 +96,7 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
     marketName: `${event.teamHome} vs ${event.teamAway}`,
     selectedOutcome: outcome === 0 ? 'YES' : 'NO',
     betAmountUsdc: amountUsdc,
-    entryOdds: outcome === 0 ? event.odds.home : event.odds.away,
+    entryOdds,
     currentValueUsdc: amountUsdc,
     status: 'PENDING',
     rail,
@@ -108,7 +112,7 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   pushLog('relayer', 'info', `building ${chainLabel} redelegation bundle — bet ${amountUsdc} USDC on outcome ${outcome}`);
 
   try {
-    const intent = { marketId: 0, outcome, amountUsdc: amount, bettor, viaFollower: rail === 'follower' } as const;
+    const intent = { marketId: 0, outcome, amountUsdc: amount, entryPriceE6, bettor, viaFollower: rail === 'follower' } as const;
     const { taskId, feeAmount } = await estimateAndSend(
       (fee) => (browserMode ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
       parseUnits('0.01', 6),
@@ -163,6 +167,7 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
       marketId: position.marketId,
       outcome: position.outcomeIndex,
       amountUsdc: parseUnits(String(position.betAmountUsdc), 6),
+      entryPriceE6: BigInt(Math.min(990_000, Math.max(10_000, Math.round(position.entryOdds * 1e6)))),
       bettor: (position.bettor as `0x${string}`) ?? ctx.userSmartAccount.address,
     });
     position.recordTxHash = recordTx;
