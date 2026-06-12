@@ -87,9 +87,11 @@ Hard limits you must respect: amountUsdc <= ${Math.min(cfg.maxSpendPerMatch, bud
   return fallbackDecision(cfg, event, budgetLeftUsdc);
 }
 
-/** Deterministic rules: bet on sharp odds dislocations (goal events). */
+/** Deterministic rules: bet ONLY on goal dislocations — periodic odds drift
+ *  is left to the real Venice model (which can reason about whether the
+ *  reprice is informative); the rule engine would spam bets on it. */
 function fallbackDecision(cfg: AgentBrainConfig, event: MatchEvent, budgetLeftUsdc: number): BetDecision {
-  if (event.kind !== 'goal' && event.kind !== 'odds-shift') {
+  if (event.kind !== 'goal') {
     return { action: 'skip', outcome: 0, amountUsdc: 0, confidence: 0.2, rationale: 'no actionable signal', engine: 'fallback' };
   }
   const dislocation = Math.abs(event.odds.home - event.odds.away);

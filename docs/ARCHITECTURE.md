@@ -93,6 +93,16 @@ sequenceDiagram
 | H3 | EIP-7702 EOA→smart-account upgrade executes through the relayer | Best Use of Relayer ($1k) | ✅ proven — user EOA code is now `0xef0100…` (StatelessDeleGator), upgrade rode the same relayer tx, gas paid in USDC, account held **0 ETH throughout**. One `authorizationList` entry per request. |
 | H4 | Webhook events arrive and verify against `/.well-known/jwks.json` (Ed25519) | Best Use of Relayer | ✅ proven — 2/2 events (type 4 submitted → type 0 confirmed) received through a cloudflared tunnel and **Ed25519-verified** against the dev JWKS using sorted-key canonical JSON. `memo` correlation echoed on every event. |
 
+### Full product loop — proven live 2026-06-12
+
+The complete pipeline ran end-to-end on Sepolia (headless mode):
+goal event → Venice decision (fallback engine) → ERC-7715 guardrail check → **2-hop redelegation bundle** → fee converged in 3 estimate rounds (12.53 USDC) → `relayer_send7710Transaction` → **2/2 Ed25519-verified webhooks** → budget transfer [`0x68e0…2157`](https://sepolia.etherscan.io/tx/0x68e0140030a5c5c3a205efddb420643f6531bc9e5f0735f925998cb6e6492157) → operator attribution [`0x874f…eea8`](https://sepolia.etherscan.io/tx/0x874f5ffc39c0349c2867b88d81e1c5cfc8f65389356c646e60182b43cd60eea8) → position OPEN. User native gas: **0 ETH**.
+
+Two production findings from getting there:
+
+- **D7 — operator rail off the relayer.** `recordBet`/`resolve` are backend admin calls sent as plain agentA transactions (agentA keeps a little ETH from deploy). Two reasons, both observed live: a non-transfer call batched under an `Erc20TransferAmount` enforcer reverts with `invalid-execution-length`, and carrying a second relayer entry tripled bundle gas (700k vs 469k → 22 vs 13 USDC fee). The *user* money rail stays 100% relayer-redeemed and gasless — which is what the tracks judge.
+- **Root budget depletes cumulatively on-chain.** The `ERC20TransferAmountEnforcer` decrements the root delegation's cap across redemptions: bet #2 was rejected with `allowance-exceeded` once `Σ(fee+bet)` crossed the cap. This is the product story working as designed (a real spending budget, not a per-tx check) — size demo budgets accordingly (~15 USDC consumed per bet at current testnet fees).
+
 **Spike findings worth designing around** (`spike/01-probe-chain.ts`, `spike/02-send-webhook.ts`):
 
 - **Caveat enforcement is real and per-hop**: when the relayer fee pushed total transfers past the root delegation's budget, the on-chain `ERC20TransferAmountEnforcer` reverted with `allowance-exceeded` at estimate time. This is the "hijacked AI can't exceed its budget" demo, observed live — keep it in the pitch.

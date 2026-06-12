@@ -120,9 +120,12 @@ export async function getHeadlessRoot(ctx: ChainContext): Promise<Delegation> {
     from: ctx.userSmartAccount.address,
     environment: ctx.environment,
     salt: freshSalt(),
-    // budget ceiling, not target spend — Sepolia relayer fees swing 6-22 USDC
-    // with testnet gas price, so leave generous headroom above fee+bet
-    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: parseUnits('30', 6) },
+    // budget ceiling, not target spend. The on-chain enforcer decrements this
+    // CUMULATIVELY across redemptions (observed live: bet #2 rejected with
+    // allowance-exceeded once fee+bet sums crossed the cap) and Sepolia
+    // relayer fees swing 6-22 USDC with testnet gas — so one demo session of
+    // 3-4 bets needs ~60.
+    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: parseUnits('60', 6) },
   });
   headlessRoot = { ...root, signature: await ctx.userSmartAccount.signDelegation({ delegation: root }) };
   return headlessRoot;
