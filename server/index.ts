@@ -19,7 +19,7 @@ import { decodeDelegations } from '@metamask/smart-accounts-kit/utils';
 import { initChainContext, getHeadlessRoot, setBrowserRoot, getBrowserDelegator, publicClient, type ChainContext } from './chain';
 import { onMarketSignal, setWebhookUrl, applyConfirmation, findPositionByMemo } from './agent';
 import { verifyWebhook, type WebhookBody } from './relayer';
-import { startPolymarketFeed, getMarketBoard, injectDislocation, marketSignals, type MarketSignal, type MarketQuote } from './polymarket';
+import { startPolymarketFeed, getBoard, injectDislocation, marketSignals, type MarketSignal, type BoardSnapshot } from './polymarket';
 import {
   getAgentConfig,
   pushBoard,
@@ -39,7 +39,7 @@ app.use(express.json({ limit: '1mb' }));
 
 let ctx: ChainContext;
 
-marketSignals.on('board', (board: MarketQuote[]) => pushBoard(board));
+marketSignals.on('board', (board: BoardSnapshot) => pushBoard(board));
 marketSignals.on('signal', (signal: MarketSignal) => void onMarketSignal(ctx, signal));
 
 app.get('/api/telemetry', (req, res) => {
@@ -82,7 +82,7 @@ app.get('/api/state', async (_req, res) => {
 });
 
 app.get('/api/markets', (_req, res) => {
-  res.json(getMarketBoard());
+  res.json(getBoard());
 });
 
 app.post('/api/markets/inject', (req, res) => {
@@ -172,7 +172,7 @@ app.get('/api/health', (_req, res) => {
     market: ctx.market ?? null,
     relayerTarget: ctx.caps.targetAddress,
     veniceKey: Boolean(process.env.VENICE_API_KEY),
-    boardSize: getMarketBoard().length,
+    board: { matches: getBoard().matches.length, futures: getBoard().futures.length },
   });
 });
 

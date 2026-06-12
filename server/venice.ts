@@ -56,7 +56,7 @@ Hard limits: amountUsdc <= ${Math.min(cfg.maxSpendPerMatch, budgetLeftUsdc)}; sk
             },
             {
               role: 'user',
-              content: `Market: "${market.question}" | YES $${market.yesPrice.toFixed(3)} / NO $${market.noPrice.toFixed(3)} | 24h volume $${Math.round(market.volume24h).toLocaleString()} | repricing delta on YES: ${market.delta >= 0 ? '+' : ''}${market.delta.toFixed(3)}${market.injected ? ' (synthetic demo event)' : ''}`,
+              content: `${market.matchTitle ? `Match: ${market.matchTitle} (World Cup 2026). ` : ''}Market: "${market.question}" | YES $${market.yesPrice.toFixed(3)} / NO $${market.noPrice.toFixed(3)} | 24h volume $${Math.round(market.volume24h).toLocaleString()} | repricing delta on YES: ${market.delta >= 0 ? '+' : ''}${market.delta.toFixed(3)}${market.injected ? ' (synthetic demo event)' : ''}`,
             },
           ],
         }),

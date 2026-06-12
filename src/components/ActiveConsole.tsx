@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Terminal, Layers, RefreshCw, Wallet, Flame, TrendingUp, TrendingDown, Power, ExternalLink, Zap } from 'lucide-react';
 import { AgentConfig, StyleId } from '../types';
 import { THEME_PRESETS } from '../styles';
-import { api, useTelemetry, type MarketQuote } from '../lib/api';
+import { api, useTelemetry, type MarketQuote, type MatchGroup } from '../lib/api';
 
 interface ActiveConsoleProps {
   config: AgentConfig;
@@ -16,7 +16,7 @@ interface ActiveConsoleProps {
 }
 
 export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsoleProps) {
-  const { logs, markets, state, connected } = useTelemetry();
+  const { logs, board, state, connected } = useTelemetry();
   const [hiddenBefore, setHiddenBefore] = useState(0);
   const [injecting, setInjecting] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -132,28 +132,42 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
               </span>
               <span className="text-[11px] font-bold uppercase tracking-wider opacity-85">
-                Polymarket · World Cup Winner — live board
+                Polymarket · World Cup 2026 — match board
               </span>
             </div>
             <span className="text-[10px] font-mono px-2 py-0.5 border bg-[#fae155] text-stone-950 border-stone-950">
-              {markets.length} MARKETS · Gamma API
+              {board.matches.length} MATCHES · Gamma API
             </span>
           </div>
 
-          <div className="mt-3 space-y-1.5 overflow-y-auto max-h-[430px] pr-1">
-            {markets.length === 0 && (
+          <div className="mt-3 space-y-2 overflow-y-auto max-h-[440px] pr-1">
+            {board.matches.length === 0 && board.futures.length === 0 && (
               <div className="text-center py-10 text-xs font-mono opacity-50">
                 {connected ? 'loading Polymarket board…' : 'connecting to PolyForge server (npm run server)…'}
               </div>
             )}
-            {markets.map((m) => (
-              <MarketRow key={m.slug} market={m} injecting={injecting === m.slug} onInject={() => void handleInject(m.slug)} />
+            {board.matches.map((match) => (
+              <MatchCard key={match.eventSlug} match={match} injecting={injecting} onInject={(slug) => void handleInject(slug)} />
             ))}
+
+            {board.futures.length > 0 && (
+              <details className="border-2 border-stone-950 bg-stone-50">
+                <summary className="cursor-pointer px-2.5 py-2 text-[10px] font-bold uppercase tracking-wider font-mono select-none">
+                  🏆 Championship futures — World Cup Winner ({board.futures.length} markets)
+                </summary>
+                <div className="p-2 pt-0 space-y-1.5 max-h-[260px] overflow-y-auto">
+                  {board.futures.map((m) => (
+                    <MarketRow key={m.slug} market={m} injecting={injecting === m.slug} onInject={() => void handleInject(m.slug)} />
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
 
           <p className="text-[9px] opacity-45 font-mono mt-2.5 leading-relaxed">
-            Real-time quotes from polymarket.com (read-only Gamma API). ⚡ injects a synthetic dislocation for demo
-            determinism — labeled in telemetry. Execution settles on the Sepolia mirror market via the 1Shot relayer.
+            Real-time match moneylines + futures from polymarket.com (read-only Gamma API). ⚡ injects a synthetic
+            dislocation for demo determinism — labeled in telemetry. Execution settles on the Sepolia mirror market via
+            the 1Shot relayer.
           </p>
 
           {/* Positions */}
@@ -274,6 +288,61 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
             </button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function MatchCard({
+  match,
+  injecting,
+  onInject,
+}: {
+  match: MatchGroup;
+  injecting: string | null;
+  onInject: (slug: string) => void;
+  key?: string;
+}) {
+  const day = match.endDate ? new Date(match.endDate).toISOString().slice(5, 10).replace('-', '/') : '';
+  return (
+    <div className="border-2 border-stone-950 bg-white text-stone-950 p-2.5">
+      <div className="flex items-center justify-between gap-2 border-b border-stone-950/15 pb-1.5 mb-2">
+        <div className="font-bold text-xs truncate flex items-center gap-1.5">
+          ⚽ <span className="truncate">{match.title}</span>
+          <a href={match.polymarketUrl} target="_blank" rel="noreferrer" className="text-blue-600 shrink-0" title="Open on Polymarket">
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+        <span className="text-[9px] font-mono opacity-55 shrink-0">{day} UTC</span>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {match.markets.map((m) => {
+          const deltaUp = m.delta > 0;
+          const hasDelta = Math.abs(m.delta) >= 0.001;
+          return (
+            <div key={m.slug} className={`border-2 border-stone-950 p-1.5 text-center ${m.injected ? 'bg-[#fef3c7]' : 'bg-stone-50'}`}>
+              <div className="text-[9px] font-bold uppercase truncate" title={m.question}>
+                {m.label}
+                {m.injected && <span className="ml-1 text-[7px] px-0.5 bg-stone-950 text-white font-mono">demo Δ</span>}
+              </div>
+              <div className="font-mono font-black text-xs mt-0.5">${m.yesPrice.toFixed(3)}</div>
+              <div className={`text-[8.5px] font-mono flex items-center justify-center gap-0.5 ${hasDelta ? (deltaUp ? 'text-emerald-600' : 'text-rose-600') : 'opacity-40'}`}>
+                {hasDelta && (deltaUp ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />)}
+                Δ{m.delta >= 0 ? '+' : ''}
+                {m.delta.toFixed(3)}
+              </div>
+              <button
+                type="button"
+                onClick={() => onInject(m.slug)}
+                disabled={injecting === m.slug}
+                title={`Inject a synthetic dislocation on ${m.label} (demo)`}
+                className={`mt-1 w-full py-0.5 border-2 border-stone-950 rounded-none cursor-pointer flex items-center justify-center ${injecting === m.slug ? 'bg-stone-200' : 'bg-[#fae155] hover:bg-[#ebd01c]'}`}
+              >
+                <Zap className="w-3 h-3" />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

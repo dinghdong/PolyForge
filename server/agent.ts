@@ -17,11 +17,13 @@ import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
 import type { MarketSignal } from './polymarket';
 import {
+  addMatchSpent,
   addSpent,
   budgetLeft,
   getAgentConfig,
   getPositions,
   isAgentActive,
+  matchSpent,
   pushLog,
   upsertPosition,
   type Position,
@@ -52,8 +54,21 @@ export async function onMarketSignal(ctx: ChainContext, signal: MarketSignal) {
 
   inFlight = true;
   try {
+    // Max Spend Per Match: cumulative across all outcomes of one match
+    const matchKey = market.matchSlug ?? `futures:${market.slug}`;
+    const matchUsed = matchSpent(matchKey);
+    const matchLeftUsdc = cfg.maxSpendPerMatch - matchUsed;
+    if (matchLeftUsdc <= 0) {
+      pushLog(
+        'guardrail',
+        'warning',
+        `BLOCKED: per-match cap reached for "${market.matchTitle ?? market.label}" — already $${matchUsed.toFixed(2)} / cap $${cfg.maxSpendPerMatch} (no re-entry this match)`,
+      );
+      return;
+    }
+
     // 1) brain — analyse this market's repricing
-    const left = budgetLeft();
+    const left = Math.min(budgetLeft(), matchLeftUsdc);
     const decision = await decideBet(cfg, market, left);
     pushLog(
       'venice',
@@ -64,15 +79,23 @@ export async function onMarketSignal(ctx: ChainContext, signal: MarketSignal) {
     if (decision.action !== 'bet') return;
 
     // 2) guardrail precheck (mirror of the on-chain caveats)
-    if (decision.amountUsdc > cfg.maxSpendPerMatch || decision.amountUsdc > left) {
-      pushLog('guardrail', 'error', `BLOCKED: ${decision.amountUsdc} USDC exceeds per-market cap ${cfg.maxSpendPerMatch} or daily budget left ${left}`);
+    if (decision.amountUsdc > matchLeftUsdc || decision.amountUsdc > budgetLeft()) {
+      pushLog(
+        'guardrail',
+        'error',
+        `BLOCKED: $${decision.amountUsdc} exceeds match budget left $${matchLeftUsdc.toFixed(2)} (cap $${cfg.maxSpendPerMatch}) or daily left $${budgetLeft().toFixed(2)}`,
+      );
       return;
     }
     if (new Date(cfg.expiryDate).getTime() < Date.now()) {
       pushLog('guardrail', 'error', 'BLOCKED: permission expired');
       return;
     }
-    pushLog('guardrail', 'success', `ERC-7715 limit check OK — ${decision.amountUsdc} USDC ≤ caps (per-market ${cfg.maxSpendPerMatch}, daily left ${left.toFixed(2)})`);
+    pushLog(
+      'guardrail',
+      'success',
+      `ERC-7715 limit check OK — $${decision.amountUsdc} (match: ${matchUsed.toFixed(2)}+${decision.amountUsdc} ≤ ${cfg.maxSpendPerMatch}; daily left ${budgetLeft().toFixed(2)}; expires ${cfg.expiryDate})`,
+    );
 
     // 3) execute (star rail; optionally mirrored by the 3-hop follower rail)
     lastBetAt.set(market.slug, Date.now());
@@ -80,6 +103,7 @@ export async function onMarketSignal(ctx: ChainContext, signal: MarketSignal) {
     for (const rail of rails) {
       await executeBet(ctx, signal, rail, decision.outcome, decision.amountUsdc);
     }
+    addMatchSpent(matchKey, decision.amountUsdc * rails.length);
   } catch (e) {
     pushLog('system', 'error', `agent loop error: ${(e as Error).message}`);
   } finally {

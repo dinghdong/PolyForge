@@ -8,7 +8,9 @@ import type { TelemetryLog } from '../types';
 export type MarketQuote = {
   slug: string;
   question: string;
-  eventSlug: string;
+  label: string;
+  matchSlug?: string;
+  matchTitle?: string;
   yesPrice: number;
   noPrice: number;
   volume24h: number;
@@ -16,6 +18,19 @@ export type MarketQuote = {
   injected?: boolean;
   polymarketUrl: string;
   updatedAt: number;
+};
+
+export type MatchGroup = {
+  eventSlug: string;
+  title: string;
+  endDate?: string;
+  polymarketUrl: string;
+  markets: MarketQuote[];
+};
+
+export type BoardSnapshot = {
+  matches: MatchGroup[];
+  futures: MarketQuote[];
 };
 
 export type ServerPosition = {
@@ -73,16 +88,16 @@ export const api = {
     const res = await fetch('/api/state');
     return (await res.json()) as ServerState;
   },
-  getMarkets: async (): Promise<MarketQuote[]> => {
+  getMarkets: async (): Promise<BoardSnapshot> => {
     const res = await fetch('/api/markets');
-    return (await res.json()) as MarketQuote[];
+    return (await res.json()) as BoardSnapshot;
   },
 };
 
 /** Live telemetry over SSE with auto-reconnect. */
 export function useTelemetry() {
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
-  const [markets, setMarkets] = useState<MarketQuote[]>([]);
+  const [board, setBoard] = useState<BoardSnapshot>({ matches: [], futures: [] });
   const [state, setState] = useState<ServerState | null>(null);
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
@@ -103,7 +118,7 @@ export function useTelemetry() {
           return next.length > 200 ? next.slice(-200) : next;
         });
       });
-      es.addEventListener('markets', (e) => setMarkets(JSON.parse((e as MessageEvent).data) as MarketQuote[]));
+      es.addEventListener('markets', (e) => setBoard(JSON.parse((e as MessageEvent).data) as BoardSnapshot));
       es.addEventListener('state', (e) => setState(JSON.parse((e as MessageEvent).data) as ServerState));
       es.onerror = () => {
         setConnected(false);
@@ -114,12 +129,12 @@ export function useTelemetry() {
 
     connect();
     void api.getState().then(setState).catch(() => {});
-    void api.getMarkets().then(setMarkets).catch(() => {});
+    void api.getMarkets().then(setBoard).catch(() => {});
     return () => {
       stopped = true;
       esRef.current?.close();
     };
   }, []);
 
-  return { logs, markets, state, connected };
+  return { logs, board, state, connected };
 }

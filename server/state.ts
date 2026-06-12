@@ -3,7 +3,7 @@
  * Telemetry shape mirrors the frontend's TelemetryLog type.
  */
 import type { Response } from 'express';
-import type { MarketQuote } from './polymarket';
+import type { BoardSnapshot } from './polymarket';
 
 export type TelemetrySource = 'venice' | 'guardrail' | 'relayer' | 'contract' | 'system';
 export type TelemetryType = 'info' | 'success' | 'warning' | 'error';
@@ -49,7 +49,8 @@ const positions: Position[] = [];
 let agentConfig: AgentRuntimeConfig | undefined;
 let agentActive = false;
 let spentTodayUsdc = 0;
-let lastBoard: MarketQuote[] = [];
+const spentPerMatch = new Map<string, number>();
+let lastBoard: BoardSnapshot = { matches: [], futures: [] };
 
 const sseClients = new Set<Response>();
 let seq = 0;
@@ -60,7 +61,9 @@ export function sseSubscribe(res: Response) {
   for (const log of logs.slice(-40)) {
     res.write(`event: log\ndata: ${JSON.stringify(log)}\n\n`);
   }
-  if (lastBoard.length > 0) res.write(`event: markets\ndata: ${JSON.stringify(lastBoard)}\n\n`);
+  if (lastBoard.matches.length > 0 || lastBoard.futures.length > 0) {
+    res.write(`event: markets\ndata: ${JSON.stringify(lastBoard)}\n\n`);
+  }
   res.write(`event: state\ndata: ${JSON.stringify(snapshot())}\n\n`);
 }
 
@@ -89,9 +92,17 @@ export function pushLog(source: TelemetrySource, type: TelemetryType, message: s
   return log;
 }
 
-export function pushBoard(board: MarketQuote[]) {
+export function pushBoard(board: BoardSnapshot) {
   lastBoard = board;
   broadcast('markets', board);
+}
+
+/** Max-Spend-Per-Match guardrail accounting (key = match event slug). */
+export function matchSpent(key: string): number {
+  return spentPerMatch.get(key) ?? 0;
+}
+export function addMatchSpent(key: string, usdc: number) {
+  spentPerMatch.set(key, (spentPerMatch.get(key) ?? 0) + usdc);
 }
 
 export function upsertPosition(p: Position) {
