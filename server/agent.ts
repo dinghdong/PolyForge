@@ -3,7 +3,14 @@
  * delegation bundle → relayer (gasless) → webhook/poll → position update.
  */
 import { formatUnits, parseUnits } from 'viem';
-import { buildBetBundle, buildBrowserBetBundle, getBrowserRoot, recordBetDirect, type ChainContext } from './chain';
+import {
+  buildBetBundle,
+  buildBrowserBetBundle,
+  getBrowserDelegator,
+  getBrowserRoot,
+  recordBetDirect,
+  type ChainContext,
+} from './chain';
 import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
 import type { MatchEvent } from './simulator';
@@ -74,10 +81,14 @@ export async function onMatchEvent(ctx: ChainContext, event: MatchEvent) {
 
 async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | 'follower', outcome: 0 | 1, amountUsdc: number) {
   const amount = parseUnits(String(amountUsdc), 6);
+  // in browser mode the bettor (and the wallet whose USDC moves) is the
+  // real account that granted the 7715 permission
+  const bettor = getBrowserDelegator() ?? ctx.userSmartAccount.address;
   const position: Position = {
     id: `pos-${++positionSeq}`,
     marketId: 0,
     outcomeIndex: outcome,
+    bettor,
     marketName: `${event.teamHome} vs ${event.teamAway}`,
     selectedOutcome: outcome === 0 ? 'YES' : 'NO',
     betAmountUsdc: amountUsdc,
@@ -97,7 +108,7 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   pushLog('relayer', 'info', `building ${chainLabel} redelegation bundle — bet ${amountUsdc} USDC on outcome ${outcome}`);
 
   try {
-    const intent = { marketId: 0, outcome, amountUsdc: amount, bettor: ctx.userSmartAccount.address, viaFollower: rail === 'follower' } as const;
+    const intent = { marketId: 0, outcome, amountUsdc: amount, bettor, viaFollower: rail === 'follower' } as const;
     const { taskId, feeAmount } = await estimateAndSend(
       (fee) => (browserMode ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
       parseUnits('0.01', 6),
@@ -152,7 +163,7 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
       marketId: position.marketId,
       outcome: position.outcomeIndex,
       amountUsdc: parseUnits(String(position.betAmountUsdc), 6),
-      bettor: ctx.userSmartAccount.address,
+      bettor: (position.bettor as `0x${string}`) ?? ctx.userSmartAccount.address,
     });
     position.recordTxHash = recordTx;
     upsertPosition(position);

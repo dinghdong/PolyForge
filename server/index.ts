@@ -15,7 +15,7 @@ import express from 'express';
 import { config as loadEnv } from 'dotenv';
 import { erc20Abi, formatUnits } from 'viem';
 import { decodeDelegations } from '@metamask/smart-accounts-kit/utils';
-import { initChainContext, getHeadlessRoot, setBrowserRoot, publicClient, type ChainContext } from './chain';
+import { initChainContext, getHeadlessRoot, setBrowserRoot, getBrowserDelegator, publicClient, type ChainContext } from './chain';
 import { onMatchEvent, setWebhookUrl, applyConfirmation, findPositionByMemo } from './agent';
 import { verifyWebhook, type WebhookBody } from './relayer';
 import { MatchSimulator } from './simulator';
@@ -63,13 +63,14 @@ app.get('/api/telemetry', (req, res) => {
 });
 
 app.get('/api/state', async (_req, res) => {
+  const activeUser = getBrowserDelegator() ?? ctx.userSmartAccount.address;
   let balanceUsdc: number | null = null;
   try {
     const raw = (await publicClient.readContract({
       address: ctx.usdc,
       abi: erc20Abi,
       functionName: 'balanceOf',
-      args: [ctx.userSmartAccount.address],
+      args: [activeUser],
     })) as bigint;
     balanceUsdc = Number(formatUnits(raw, 6));
   } catch {
@@ -80,7 +81,7 @@ app.get('/api/state', async (_req, res) => {
     market: ctx.market,
     usdc: ctx.usdc,
     agentA: ctx.agentA.address,
-    user: ctx.userSmartAccount.address,
+    user: activeUser,
     balanceUsdc,
   });
 });

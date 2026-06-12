@@ -177,6 +177,13 @@ export function getBrowserRoot(): Delegation[] | undefined {
   return browserRoot;
 }
 
+/** The real wallet that granted the 7715 permission (root delegator) —
+ *  in browser mode this is the bettor and the account whose USDC moves. */
+export function getBrowserDelegator(): `0x${string}` | undefined {
+  if (!browserRoot?.length) return undefined;
+  return browserRoot[browserRoot.length - 1].delegator as `0x${string}`;
+}
+
 /** agentA redelegates a narrowed slice straight to the relayer target. */
 async function redelegateToTarget(ctx: ChainContext, parent: Delegation, capUsdc: bigint): Promise<Delegation> {
   const leaf = createDelegation({

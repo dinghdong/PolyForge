@@ -21,6 +21,7 @@ export type Position = {
   betId?: number;
   marketId: number;
   outcomeIndex: 0 | 1;
+  bettor?: string;
   marketName: string;
   selectedOutcome: 'YES' | 'NO';
   betAmountUsdc: number;
