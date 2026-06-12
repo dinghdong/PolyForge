@@ -4,10 +4,10 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Terminal, Layers, RefreshCw, Wallet, Flame, TrendingUp, Sparkles, Power } from 'lucide-react';
+import { ArrowLeft, Terminal, Layers, RefreshCw, Wallet, Flame, TrendingUp, TrendingDown, Power, ExternalLink, Zap } from 'lucide-react';
 import { AgentConfig, StyleId } from '../types';
 import { THEME_PRESETS } from '../styles';
-import { api, useTelemetry } from '../lib/api';
+import { api, useTelemetry, type MarketQuote } from '../lib/api';
 
 interface ActiveConsoleProps {
   config: AgentConfig;
@@ -16,9 +16,9 @@ interface ActiveConsoleProps {
 }
 
 export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsoleProps) {
-  const { logs, match, state, connected } = useTelemetry();
-  const [hiddenBefore, setHiddenBefore] = useState(0); // "reset view" marker
-  const [ballPosition, setBallPosition] = useState(50);
+  const { logs, markets, state, connected } = useTelemetry();
+  const [hiddenBefore, setHiddenBefore] = useState(0);
+  const [injecting, setInjecting] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const t = THEME_PRESETS[styleId];
@@ -29,21 +29,14 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [visibleLogs.length]);
 
-  // ball animation driven by real match events
-  useEffect(() => {
-    if (!match) return;
-    if (match.kind === 'goal') {
-      setBallPosition(match.scoreHome > match.scoreAway ? 12 : 88);
-    } else {
-      setBallPosition((prev) => {
-        const next = prev + (Math.floor(Math.random() * 21) - 10);
-        return Math.max(18, Math.min(82, next));
-      });
+  const handleInject = async (slug: string) => {
+    setInjecting(slug);
+    try {
+      await api.injectDislocation(slug);
+    } finally {
+      setTimeout(() => setInjecting(null), 1500);
     }
-  }, [match]);
-
-  const teamHome = match?.teamHome ?? 'Brazil';
-  const teamAway = match?.teamAway ?? 'Germany';
+  };
 
   return (
     <div id="active-monitoring-console" className="space-y-6 animate-in fade-in duration-200">
@@ -65,7 +58,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
             }`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-            {state?.agentActive ? 'Agent ACTIVE — autonomous' : connected ? 'Agent idle' : 'server offline'}
+            {state?.agentActive ? 'Agent ACTIVE — scanning board' : connected ? 'Agent idle' : 'server offline'}
           </div>
 
           {state?.agentActive && (
@@ -112,7 +105,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
             <Layers className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-[10px] opacity-50 font-mono tracking-tight uppercase font-semibold">Onchain Bets</span>
+            <span className="text-[10px] opacity-50 font-mono tracking-tight uppercase font-semibold">Onchain Positions</span>
             <div className="text-sm font-black font-mono leading-none mt-1">{positions.length} Positions</div>
           </div>
         </div>
@@ -130,119 +123,60 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
 
       {/* Main content grid */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        {/* Visual Arena */}
-        <div className={`xl:col-span-7 flex flex-col justify-between ${t.cardBg}`}>
-          <div>
-            <div className="flex items-center justify-between border-b pb-3 border-current/10">
-              <div className="flex items-center gap-2">
-                <span className="relative flex h-2 w-2 shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                </span>
-                <span className="text-[11px] font-bold uppercase tracking-wider opacity-85">Live Feed — World Cup 2026 (simulated)</span>
-              </div>
-              <span className="text-[10px] font-mono px-2 py-0.5 border bg-[#fae155] text-stone-950 border-stone-950">
-                {match ? `MINUTE ${match.minute}' ${match.kind === 'fulltime' ? 'FT' : 'LIVE'}` : 'WAITING'}
+        {/* Market Board */}
+        <div className={`xl:col-span-7 flex flex-col ${t.cardBg}`}>
+          <div className="flex items-center justify-between border-b pb-3 border-current/10">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-500 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+              </span>
+              <span className="text-[11px] font-bold uppercase tracking-wider opacity-85">
+                Polymarket · World Cup Winner — live board
               </span>
             </div>
-
-            {/* Scoreboard */}
-            <div className="py-4 px-5 text-center flex items-center justify-center gap-6 mt-4 relative rounded-lg border bg-[#fafaf8] border-2 border-stone-950">
-              <div className="flex-1 text-right">
-                <span className="text-[11px] font-mono font-bold uppercase text-blue-600">{teamHome}</span>
-                <p className="text-[9px] opacity-40 italic">signal feed</p>
-              </div>
-
-              <div className="text-xl font-black font-mono tracking-widest px-4 py-1.5 rounded-lg border bg-white border-2 border-stone-950 text-stone-950">
-                <span className="text-emerald-500">{match?.scoreHome ?? 0}</span>
-                <span className="opacity-40 select-none"> - </span>
-                <span>{match?.scoreAway ?? 0}</span>
-              </div>
-
-              <div className="flex-1 text-left">
-                <span className="text-[11px] font-mono font-bold uppercase">{teamAway}</span>
-                <p className="text-[9px] opacity-40 italic">match sim</p>
-              </div>
-            </div>
-
-            {/* Traded market — real Polymarket quote when the feed is live */}
-            <div className="mt-2 px-3 py-1.5 border-2 border-stone-950 bg-[#e0e7ff] text-stone-950 text-[10px] font-mono flex items-center gap-2">
-              {match?.oddsSource ? (
-                <>
-                  <span className="px-1 bg-stone-950 text-white font-bold uppercase text-[8px] shrink-0">live</span>
-                  <span className="truncate" title={match.oddsSource}>📊 {match.oddsSource.replace('Polymarket: ', '')}</span>
-                  <span className="ml-auto shrink-0 font-bold">
-                    YES <span className="text-emerald-700">${match.odds.home.toFixed(3)}</span> · NO{' '}
-                    <span className="text-rose-700">${match.odds.away.toFixed(3)}</span>
-                  </span>
-                  <span className="text-[8px] opacity-50 shrink-0">Polymarket · Gamma</span>
-                </>
-              ) : (
-                <span className="opacity-60">
-                  📊 Market: simulated odds — YES ${match ? match.odds.home.toFixed(3) : '—'} · NO $
-                  {match ? match.odds.away.toFixed(3) : '—'}
-                </span>
-              )}
-            </div>
-
-            {/* Pitch */}
-            <div className="my-4 relative overflow-hidden h-36 flex flex-col justify-between p-3 border border-2 border-stone-950 bg-[#166534]">
-              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-white/10"></div>
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white/10"></div>
-              <div className="absolute left-0 bottom-4 top-4 w-8 border-r border-y border-white/10"></div>
-              <div className="absolute right-0 bottom-4 top-4 w-8 border-l border-y border-white/10"></div>
-
-              <div
-                className="absolute w-5.5 h-5.5 rounded-full bg-white border shadow-lg flex items-center justify-center text-[10px] font-bold text-stone-950 transition-all duration-700 border-2 border-stone-950 shadow-none"
-                style={{ left: `${ballPosition}%`, top: '38%' }}
-              >
-                ⚽
-              </div>
-
-              <div className="z-10 px-3 py-1.5 rounded text-[10px] font-mono text-center flex items-center justify-center gap-1.5 mt-auto border bg-white border-2 border-stone-950 text-stone-950">
-                <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span>{match ? match.description : 'Waiting for kickoff — activate the agent in the Forge.'}</span>
-              </div>
-            </div>
-
-            {/* Demo controls */}
-            <div className="p-3.5 rounded-lg space-y-2.5 border bg-[#fafae8] border-2 border-stone-950">
-              <span className="text-[10px] opacity-60 block uppercase font-bold tracking-wider">
-                🔧 Demo Controls (inject real match events — the agent reacts on-chain)
-              </span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => void api.simEvent('goal-home')}
-                  className="py-1.5 px-2 text-[10px] font-bold font-display cursor-pointer bg-blue-300 hover:bg-blue-400 border-2 border-stone-950 rounded-none text-stone-950"
-                >
-                  ⚽ Goal {teamHome}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void api.simEvent('goal-away')}
-                  className="py-1.5 px-2 text-[10px] font-bold font-display cursor-pointer bg-stone-100 hover:bg-stone-200 border-2 border-stone-950 rounded-none text-stone-950"
-                >
-                  ⚽ Goal {teamAway}
-                </button>
-              </div>
-            </div>
+            <span className="text-[10px] font-mono px-2 py-0.5 border bg-[#fae155] text-stone-950 border-stone-950">
+              {markets.length} MARKETS · Gamma API
+            </span>
           </div>
+
+          <div className="mt-3 space-y-1.5 overflow-y-auto max-h-[430px] pr-1">
+            {markets.length === 0 && (
+              <div className="text-center py-10 text-xs font-mono opacity-50">
+                {connected ? 'loading Polymarket board…' : 'connecting to PolyForge server (npm run server)…'}
+              </div>
+            )}
+            {markets.map((m) => (
+              <MarketRow key={m.slug} market={m} injecting={injecting === m.slug} onInject={() => void handleInject(m.slug)} />
+            ))}
+          </div>
+
+          <p className="text-[9px] opacity-45 font-mono mt-2.5 leading-relaxed">
+            Real-time quotes from polymarket.com (read-only Gamma API). ⚡ injects a synthetic dislocation for demo
+            determinism — labeled in telemetry. Execution settles on the Sepolia mirror market via the 1Shot relayer.
+          </p>
 
           {/* Positions */}
           <div className="mt-4 border-t border-current/10 pt-3.5">
             <span className="text-[11px] uppercase tracking-wider opacity-60 block mb-2 font-bold">
-              💼 Onchain Positions (MockPredictionMarket · Sepolia)
+              💼 Onchain Positions (mirror market · Sepolia)
             </span>
-            <div className="space-y-1.5 max-h-[160px] overflow-y-auto">
+            <div className="space-y-1.5 max-h-[180px] overflow-y-auto">
               {positions.length === 0 ? (
-                <div className="text-center py-2 text-xs font-mono opacity-50">No positions yet — wait for a goal or inject one above.</div>
+                <div className="text-center py-2 text-xs font-mono opacity-50">
+                  No positions yet — wait for a real reprice or inject one above.
+                </div>
               ) : (
                 positions.map((pos) => (
                   <div key={pos.id} className="p-2.5 flex items-center justify-between text-xs border bg-white border-2 border-stone-950 rounded-none text-stone-950">
-                    <div>
-                      <div className="font-semibold leading-tight">
+                    <div className="min-w-0">
+                      <div className="font-semibold leading-tight truncate">
                         {pos.marketName}
+                        {pos.polymarketUrl && (
+                          <a className="ml-1.5 inline-block align-middle text-blue-600" href={pos.polymarketUrl} target="_blank" rel="noreferrer" title="View on Polymarket">
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
                         <span className={`ml-2 text-[8px] px-1 py-0.5 border border-stone-950 font-mono uppercase ${pos.rail === 'follower' ? 'bg-purple-200' : 'bg-blue-200'}`}>
                           {pos.rail === 'follower' ? 'A2A copy (3-hop)' : 'star (2-hop)'}
                         </span>
@@ -259,7 +193,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
                         )}
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right shrink-0 ml-2">
                       <div
                         className={`font-mono text-[10px] font-bold px-1.5 py-0.5 border-2 border-stone-950 ${
                           pos.status === 'OPEN' ? 'bg-[#a7f3d0]' : pos.status === 'PENDING' ? 'bg-[#fae155]' : pos.status === 'FAILED' ? 'bg-rose-200' : 'bg-stone-100'
@@ -285,7 +219,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
               </h4>
             </div>
 
-            <div className="flex-1 overflow-y-auto pr-1 space-y-2 text-[11px] font-mono max-h-[380px] min-h-[300px]">
+            <div className="flex-1 overflow-y-auto pr-1 space-y-2 text-[11px] font-mono max-h-[460px] min-h-[320px]">
               {visibleLogs.length === 0 && (
                 <div className="text-center py-6 text-xs opacity-50">
                   {connected ? 'Stream connected — waiting for events…' : 'Connecting to PolyForge server (npm run server)…'}
@@ -341,6 +275,66 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function MarketRow({
+  market,
+  injecting,
+  onInject,
+}: {
+  market: MarketQuote;
+  injecting: boolean;
+  onInject: () => void;
+  key?: string; // satisfies the JSX checker under strictNullChecks-only tsconfig
+}) {
+  const deltaUp = market.delta > 0;
+  const hasDelta = Math.abs(market.delta) >= 0.001;
+  const vol =
+    market.volume24h >= 1_000_000
+      ? `$${(market.volume24h / 1_000_000).toFixed(1)}M`
+      : market.volume24h >= 1_000
+        ? `$${(market.volume24h / 1_000).toFixed(0)}k`
+        : `$${Math.round(market.volume24h)}`;
+
+  return (
+    <div className={`p-2 px-2.5 flex items-center gap-2 text-xs border-2 border-stone-950 rounded-none text-stone-950 ${market.injected ? 'bg-[#fef3c7]' : 'bg-white'}`}>
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold leading-tight truncate flex items-center gap-1.5">
+          <a href={market.polymarketUrl} target="_blank" rel="noreferrer" className="truncate hover:underline" title={`${market.question} — open on Polymarket`}>
+            {market.question.replace('Will ', '').replace(' win the 2026 FIFA World Cup?', '')}
+          </a>
+          <a href={market.polymarketUrl} target="_blank" rel="noreferrer" className="text-blue-600 shrink-0" title="Open on Polymarket">
+            <ExternalLink className="w-3 h-3" />
+          </a>
+          {market.injected && <span className="text-[8px] px-1 border border-stone-950 bg-stone-950 text-white font-mono uppercase shrink-0">demo Δ</span>}
+        </div>
+        <div className="text-[9px] opacity-55 font-mono mt-0.5">vol 24h {vol}</div>
+      </div>
+
+      <div className="shrink-0 text-right font-mono">
+        <div className="font-bold">
+          <span className="text-emerald-700">YES ${market.yesPrice.toFixed(3)}</span>
+          <span className="opacity-40 mx-1">·</span>
+          <span className="text-rose-700">NO ${market.noPrice.toFixed(3)}</span>
+        </div>
+        <div className={`text-[9px] flex items-center justify-end gap-0.5 ${hasDelta ? (deltaUp ? 'text-emerald-600' : 'text-rose-600') : 'opacity-40'}`}>
+          {hasDelta && (deltaUp ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />)}
+          Δ{market.delta >= 0 ? '+' : ''}
+          {market.delta.toFixed(3)}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onInject}
+        disabled={injecting}
+        title="Inject a synthetic dislocation on this market (demo)"
+        className={`shrink-0 p-1.5 border-2 border-stone-950 rounded-none cursor-pointer ${injecting ? 'bg-stone-200' : 'bg-[#fae155] hover:bg-[#ebd01c]'}`}
+      >
+        <Zap className="w-3.5 h-3.5" />
+      </button>
     </div>
   );
 }

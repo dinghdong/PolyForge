@@ -154,6 +154,29 @@ export async function recordBetDirect(ctx: ChainContext, intent: BetIntent): Pro
   return hash;
 }
 
+/** slug → on-chain mirror market id (created lazily on first bet). */
+const mirrorIds = new Map<string, number>();
+
+export async function ensureMirrorMarket(ctx: ChainContext, slug: string, question: string): Promise<number> {
+  const cached = mirrorIds.get(slug);
+  if (cached !== undefined) return cached;
+  if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
+  const nextId = Number(
+    await publicClient.readContract({ address: ctx.market, abi: MARKET_ABI, functionName: 'marketCount' }),
+  );
+  const hash = await operatorWallet(ctx).writeContract({
+    chain: CHAIN,
+    account: ctx.agentA,
+    address: ctx.market,
+    abi: MARKET_ABI,
+    functionName: 'createMarket',
+    args: [`${question} (mirrors Polymarket)`, 'Yes', 'No', BigInt(Math.floor(Date.now() / 1000) + 60 * 24 * 3600)],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  mirrorIds.set(slug, nextId);
+  return nextId;
+}
+
 export async function resolveDirect(ctx: ChainContext, marketId: number, winner: 0 | 1): Promise<`0x${string}`> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
   const hash = await operatorWallet(ctx).writeContract({

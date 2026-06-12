@@ -3,7 +3,7 @@
  * Telemetry shape mirrors the frontend's TelemetryLog type.
  */
 import type { Response } from 'express';
-import type { MatchEvent } from './simulator';
+import type { MarketQuote } from './polymarket';
 
 export type TelemetrySource = 'venice' | 'guardrail' | 'relayer' | 'contract' | 'system';
 export type TelemetryType = 'info' | 'success' | 'warning' | 'error';
@@ -23,6 +23,7 @@ export type Position = {
   outcomeIndex: 0 | 1;
   bettor?: string;
   marketName: string;
+  polymarketUrl?: string;
   selectedOutcome: 'YES' | 'NO';
   betAmountUsdc: number;
   entryOdds: number;
@@ -48,7 +49,7 @@ const positions: Position[] = [];
 let agentConfig: AgentRuntimeConfig | undefined;
 let agentActive = false;
 let spentTodayUsdc = 0;
-let lastMatchEvent: MatchEvent | undefined;
+let lastBoard: MarketQuote[] = [];
 
 const sseClients = new Set<Response>();
 let seq = 0;
@@ -59,7 +60,7 @@ export function sseSubscribe(res: Response) {
   for (const log of logs.slice(-40)) {
     res.write(`event: log\ndata: ${JSON.stringify(log)}\n\n`);
   }
-  if (lastMatchEvent) res.write(`event: match\ndata: ${JSON.stringify(lastMatchEvent)}\n\n`);
+  if (lastBoard.length > 0) res.write(`event: markets\ndata: ${JSON.stringify(lastBoard)}\n\n`);
   res.write(`event: state\ndata: ${JSON.stringify(snapshot())}\n\n`);
 }
 
@@ -88,9 +89,9 @@ export function pushLog(source: TelemetrySource, type: TelemetryType, message: s
   return log;
 }
 
-export function pushMatch(event: MatchEvent) {
-  lastMatchEvent = event;
-  broadcast('match', event);
+export function pushBoard(board: MarketQuote[]) {
+  lastBoard = board;
+  broadcast('markets', board);
 }
 
 export function upsertPosition(p: Position) {

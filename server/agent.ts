@@ -1,11 +1,13 @@
 /**
- * The agent loop: match event → Venice decision → guardrail precheck →
- * delegation bundle → relayer (gasless) → webhook/poll → position update.
+ * The agent loop: market repricing signal → Venice decision → guardrail
+ * precheck → delegation bundle → relayer (gasless) → webhook/poll →
+ * on-chain mirror position.
  */
 import { formatUnits, parseUnits } from 'viem';
 import {
   buildBetBundle,
   buildBrowserBetBundle,
+  ensureMirrorMarket,
   getBrowserDelegator,
   getBrowserRoot,
   recordBetDirect,
@@ -13,8 +15,7 @@ import {
 } from './chain';
 import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
-import { getPolymarketState } from './polymarket';
-import type { MatchEvent } from './simulator';
+import type { MarketSignal } from './polymarket';
 import {
   addSpent,
   budgetLeft,
@@ -33,45 +34,51 @@ export function setWebhookUrl(url: string | undefined) {
 
 let inFlight = false;
 let positionSeq = 0;
+/** per-market cooldown so a jittery quote doesn't trigger rapid-fire bets */
+const lastBetAt = new Map<string, number>();
+const MARKET_COOLDOWN_MS = 90_000;
 
-export async function onMatchEvent(ctx: ChainContext, event: MatchEvent) {
+export async function onMarketSignal(ctx: ChainContext, signal: MarketSignal) {
   if (!isAgentActive()) return;
-  if (event.kind !== 'goal' && event.kind !== 'odds-shift') return;
+  const { market } = signal;
   if (inFlight) {
-    pushLog('system', 'warning', 'signal skipped — previous bundle still in flight');
+    pushLog('system', 'warning', `signal on "${market.question.slice(0, 50)}…" skipped — previous bundle still in flight`);
     return;
   }
+  const last = lastBetAt.get(market.slug) ?? 0;
+  if (Date.now() - last < MARKET_COOLDOWN_MS) return;
   const cfg = getAgentConfig();
   if (!cfg) return;
 
   inFlight = true;
   try {
-    // 1) brain
+    // 1) brain — analyse this market's repricing
     const left = budgetLeft();
-    const decision = await decideBet(cfg, event, left);
+    const decision = await decideBet(cfg, market, left);
     pushLog(
       'venice',
       decision.action === 'bet' ? 'success' : 'info',
-      `[${decision.engine}${decision.model ? `:${decision.model}` : ''}] ${decision.action.toUpperCase()} ` +
-        `(conf ${decision.confidence.toFixed(2)}) ${decision.rationale}`,
+      `[${decision.engine}${decision.model ? `:${decision.model}` : ''}] "${market.question.slice(0, 60)}" → ${decision.action.toUpperCase()} ` +
+        `${decision.action === 'bet' ? `${decision.outcome === 0 ? 'YES' : 'NO'} $${decision.amountUsdc} ` : ''}(conf ${decision.confidence.toFixed(2)}) ${decision.rationale}`,
     );
     if (decision.action !== 'bet') return;
 
     // 2) guardrail precheck (mirror of the on-chain caveats)
     if (decision.amountUsdc > cfg.maxSpendPerMatch || decision.amountUsdc > left) {
-      pushLog('guardrail', 'error', `BLOCKED: ${decision.amountUsdc} USDC exceeds per-match cap ${cfg.maxSpendPerMatch} or daily budget left ${left}`);
+      pushLog('guardrail', 'error', `BLOCKED: ${decision.amountUsdc} USDC exceeds per-market cap ${cfg.maxSpendPerMatch} or daily budget left ${left}`);
       return;
     }
     if (new Date(cfg.expiryDate).getTime() < Date.now()) {
       pushLog('guardrail', 'error', 'BLOCKED: permission expired');
       return;
     }
-    pushLog('guardrail', 'success', `ERC-7715 limit check OK — ${decision.amountUsdc} USDC ≤ caps (per-match ${cfg.maxSpendPerMatch}, daily left ${left.toFixed(2)})`);
+    pushLog('guardrail', 'success', `ERC-7715 limit check OK — ${decision.amountUsdc} USDC ≤ caps (per-market ${cfg.maxSpendPerMatch}, daily left ${left.toFixed(2)})`);
 
     // 3) execute (star rail; optionally mirrored by the 3-hop follower rail)
+    lastBetAt.set(market.slug, Date.now());
     const rails: ('star' | 'follower')[] = cfg.copyTrade ? ['star', 'follower'] : ['star'];
     for (const rail of rails) {
-      await executeBet(ctx, event, rail, decision.outcome as 0 | 1, decision.amountUsdc);
+      await executeBet(ctx, signal, rail, decision.outcome, decision.amountUsdc);
     }
   } catch (e) {
     pushLog('system', 'error', `agent loop error: ${(e as Error).message}`);
@@ -80,23 +87,20 @@ export async function onMatchEvent(ctx: ChainContext, event: MatchEvent) {
   }
 }
 
-async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | 'follower', outcome: 0 | 1, amountUsdc: number) {
+async function executeBet(ctx: ChainContext, signal: MarketSignal, rail: 'star' | 'follower', outcome: 0 | 1, amountUsdc: number) {
+  const { market } = signal;
   const amount = parseUnits(String(amountUsdc), 6);
-  // in browser mode the bettor (and the wallet whose USDC moves) is the
-  // real account that granted the 7715 permission
   const bettor = getBrowserDelegator() ?? ctx.userSmartAccount.address;
-  // entry price = current implied probability for the chosen outcome
-  // (live Polymarket quote when the feed owns the odds layer)
-  const entryOdds = outcome === 0 ? event.odds.home : event.odds.away;
+  const entryOdds = outcome === 0 ? market.yesPrice : market.noPrice;
   const entryPriceE6 = BigInt(Math.min(990_000, Math.max(10_000, Math.round(entryOdds * 1e6))));
-  // position is opened on the mirrored market, not the match itself
-  const mirrored = getPolymarketState();
+
   const position: Position = {
     id: `pos-${++positionSeq}`,
-    marketId: 0,
+    marketId: -1, // assigned after the mirror market exists
     outcomeIndex: outcome,
     bettor,
-    marketName: mirrored?.question ?? `${event.teamHome} vs ${event.teamAway}`,
+    marketName: market.question,
+    polymarketUrl: market.polymarketUrl,
     selectedOutcome: outcome === 0 ? 'YES' : 'NO',
     betAmountUsdc: amountUsdc,
     entryOdds,
@@ -106,18 +110,22 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   };
   upsertPosition(position);
 
-  const browserMode = Boolean(getBrowserRoot());
-  const chainLabel = browserMode
-    ? 'ERC-7715 grant → AgentA → target (browser mode)'
-    : rail === 'star'
-      ? 'user → AgentA → target (2-hop)'
-      : 'user → AgentA → AgentB → target (3-hop)';
-  pushLog('relayer', 'info', `building ${chainLabel} redelegation bundle — bet ${amountUsdc} USDC on outcome ${outcome}`);
-
   try {
-    const intent = { marketId: 0, outcome, amountUsdc: amount, entryPriceE6, bettor, viaFollower: rail === 'follower' } as const;
+    // mirror market on Sepolia (lazy, operator-funded)
+    const marketId = await ensureMirrorMarket(ctx, market.slug, market.question);
+    position.marketId = marketId;
+    pushLog('contract', 'info', `mirror market #${marketId} ready for "${market.question.slice(0, 50)}…"`);
+
+    const chainLabel = getBrowserRoot()
+      ? 'ERC-7715 grant → AgentA → target (browser mode)'
+      : rail === 'star'
+        ? 'user → AgentA → target (2-hop)'
+        : 'user → AgentA → AgentB → target (3-hop)';
+    pushLog('relayer', 'info', `building ${chainLabel} bundle — ${amountUsdc} USDC on ${outcome === 0 ? 'YES' : 'NO'} @ $${entryOdds.toFixed(3)}`);
+
+    const intent = { marketId, outcome, amountUsdc: amount, entryPriceE6, bettor, viaFollower: rail === 'follower' } as const;
     const { taskId, feeAmount } = await estimateAndSend(
-      (fee) => (browserMode ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
+      (fee) => (getBrowserRoot() ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
       parseUnits('0.01', 6),
       { destinationUrl: webhookUrl ? `${webhookUrl}/api/relayer-webhook` : undefined, memo: position.id },
     );
@@ -164,7 +172,6 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
     'success',
     `budget transfer confirmed${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user native gas cost: 0)`,
   );
-  // attribute the received USDC to a market position (operator call, agentA pays its own gas)
   try {
     const recordTx = await recordBetDirect(ctx, {
       marketId: position.marketId,
@@ -175,7 +182,7 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
     });
     position.recordTxHash = recordTx;
     upsertPosition(position);
-    pushLog('contract', 'success', `position recorded on MockPredictionMarket — https://sepolia.etherscan.io/tx/${recordTx}`);
+    pushLog('contract', 'success', `position recorded on mirror market #${position.marketId} — https://sepolia.etherscan.io/tx/${recordTx}`);
   } catch (e) {
     pushLog('contract', 'error', `recordBet failed: ${(e as Error).message}`);
   }
