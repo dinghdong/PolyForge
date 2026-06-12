@@ -8,10 +8,11 @@ import type { MatchEvent } from './simulator';
 
 const VENICE_URL = process.env.VENICE_URL ?? 'https://api.venice.ai/api/v1/chat/completions';
 
+// Frontend modelId → real Venice model id (verified against GET /api/v1/models)
 const MODEL_MAP: Record<string, string> = {
   'venice-llama3-70b': 'llama-3.3-70b',
-  'deepseek-r1-70b': 'deepseek-r1-671b',
-  'hermes3-llama8b': 'qwen3-4b',
+  'deepseek-r1-70b': 'deepseek-v4-flash',
+  'hermes3-llama8b': 'hermes-3-llama-3.1-405b',
 };
 
 export type AgentBrainConfig = {
