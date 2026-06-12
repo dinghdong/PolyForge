@@ -14,12 +14,17 @@ const SEPOLIA_HEX = '0xaa36a7';
 
 type Eip1193 = {
   request: (args: { method: string; params?: unknown }) => Promise<unknown>;
+  isMetaMask?: boolean;
+  providers?: Eip1193[];
 };
 
 function getEthereum(): Eip1193 {
   const eth = (window as unknown as { ethereum?: Eip1193 }).ethereum;
-  if (!eth) throw new Error('No wallet found — install the MetaMask extension');
-  return eth;
+  if (!eth) throw new Error('No wallet found — install the MetaMask extension (and reload the page)');
+  // multiple wallet extensions can stack under window.ethereum.providers —
+  // ERC-7715 needs the real MetaMask provider
+  const candidates = eth.providers ?? [eth];
+  return candidates.find((p) => p.isMetaMask) ?? eth;
 }
 
 export async function connectWallet(): Promise<`0x${string}`> {

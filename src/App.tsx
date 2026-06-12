@@ -51,9 +51,23 @@ export default function App() {
   const [viewState, setViewState] = useState<'studio' | 'console'>('studio');
   const [isMMOpen, setIsMMOpen] = useState(false);
   const [activeTab, setActiveTab2] = useState<'explore' | 'launchpad' | 'vault'>('launchpad');
-  const [copiedWallet, setCopiedWallet] = useState(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState('');
   const styleId: StyleId = 'brutalist'; // Default style is Brutalist (Neo-Brutalist)
   const [activeCopiedAgent, setActiveCopiedAgent] = useState<string | null>(null);
+
+  const handleConnectWallet = async () => {
+    setWalletError('');
+    try {
+      const { connectWallet, ensureSepolia } = await import('./lib/wallet');
+      const address = await connectWallet();
+      await ensureSepolia();
+      setWalletAddress(address);
+    } catch (e) {
+      setWalletError((e as Error).message);
+      setTimeout(() => setWalletError(''), 6000);
+    }
+  };
 
   const handleDeployCopyAgent = (agentName: string, prompt: string, maxSpend: number) => {
     setActiveCopiedAgent(agentName);
@@ -77,12 +91,6 @@ export default function App() {
   };
 
   const formatAddress = (addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-
-  const handleCopyWallet = () => {
-    navigator.clipboard.writeText("0x1234567890abcdef1234567890abcdef1234ABCD");
-    setCopiedWallet(true);
-    setTimeout(() => setCopiedWallet(false), 2000);
-  };
 
   const isDailyAllowanceInvalid = config.maxDailyAllowance < config.maxSpendPerMatch;
 
@@ -134,16 +142,27 @@ export default function App() {
 
           {/* Wallet */}
           <div className="flex items-center gap-2">
-            <button 
+            {walletError && (
+              <span className="hidden md:block text-[9px] font-mono text-rose-600 max-w-[220px] truncate" title={walletError}>
+                {walletError}
+              </span>
+            )}
+            <button
               type="button"
-              onClick={handleCopyWallet}
-              className="flex items-center gap-2 px-3.5 py-1.5 transition-all text-xs font-mono font-bold cursor-pointer border-2 shadow-[2px_2px_0px_#000] rounded-none border-stone-950 bg-white text-stone-950"
-              title="Copy vault routing key"
+              onClick={handleConnectWallet}
+              className={`flex items-center gap-2 px-3.5 py-1.5 transition-all text-xs font-mono font-bold cursor-pointer border-2 shadow-[2px_2px_0px_#000] rounded-none border-stone-950 ${
+                walletAddress ? 'bg-white text-stone-950' : 'bg-[#fae155] hover:bg-[#ebd01c] text-stone-950'
+              }`}
+              title={walletAddress ? 'Connected to Sepolia' : 'Connect MetaMask (Sepolia)'}
             >
               <Wallet className="w-3.5 h-3.5 text-blue-500" />
-              <span>{formatAddress("0x1234567890abcdef1234567890abcdef1234ABCD")}</span>
-              <span className="text-[8.5px] px-1.5 py-0.5 rounded font-bold uppercase border bg-stone-950 text-white border-stone-950">
-                {copiedWallet ? 'Copied' : 'VAULT CAP'}
+              <span>{walletAddress ? formatAddress(walletAddress) : 'Connect Wallet'}</span>
+              <span
+                className={`text-[8.5px] px-1.5 py-0.5 rounded font-bold uppercase border border-stone-950 ${
+                  walletAddress ? 'bg-[#a7f3d0] text-stone-950' : 'bg-stone-950 text-white'
+                }`}
+              >
+                {walletAddress ? 'Sepolia' : '🦊'}
               </span>
             </button>
           </div>
