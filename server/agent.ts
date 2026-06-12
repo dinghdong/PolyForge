@@ -13,6 +13,7 @@ import {
 } from './chain';
 import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
+import { getPolymarketState } from './polymarket';
 import type { MatchEvent } from './simulator';
 import {
   addSpent,
@@ -88,12 +89,14 @@ async function executeBet(ctx: ChainContext, event: MatchEvent, rail: 'star' | '
   // (live Polymarket quote when the feed owns the odds layer)
   const entryOdds = outcome === 0 ? event.odds.home : event.odds.away;
   const entryPriceE6 = BigInt(Math.min(990_000, Math.max(10_000, Math.round(entryOdds * 1e6))));
+  // position is opened on the mirrored market, not the match itself
+  const mirrored = getPolymarketState();
   const position: Position = {
     id: `pos-${++positionSeq}`,
     marketId: 0,
     outcomeIndex: outcome,
     bettor,
-    marketName: `${event.teamHome} vs ${event.teamAway}`,
+    marketName: mirrored?.question ?? `${event.teamHome} vs ${event.teamAway}`,
     selectedOutcome: outcome === 0 ? 'YES' : 'NO',
     betAmountUsdc: amountUsdc,
     entryOdds,

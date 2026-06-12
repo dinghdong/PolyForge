@@ -150,7 +150,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
             <div className="py-4 px-5 text-center flex items-center justify-center gap-6 mt-4 relative rounded-lg border bg-[#fafaf8] border-2 border-stone-950">
               <div className="flex-1 text-right">
                 <span className="text-[11px] font-mono font-bold uppercase text-blue-600">{teamHome}</span>
-                <p className="text-[9px] opacity-50 italic">YES ${match ? match.odds.home.toFixed(3) : '—'}</p>
+                <p className="text-[9px] opacity-40 italic">signal feed</p>
               </div>
 
               <div className="text-xl font-black font-mono tracking-widest px-4 py-1.5 rounded-lg border bg-white border-2 border-stone-950 text-stone-950">
@@ -161,19 +161,29 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
 
               <div className="flex-1 text-left">
                 <span className="text-[11px] font-mono font-bold uppercase">{teamAway}</span>
-                <p className="text-[9px] opacity-50 italic">NO ${match ? match.odds.away.toFixed(3) : '—'}</p>
+                <p className="text-[9px] opacity-40 italic">match sim</p>
               </div>
             </div>
 
-            {/* Odds source — real Polymarket quote when the feed is live */}
-            {match?.oddsSource && (
-              <div className="mt-2 px-3 py-1.5 border-2 border-stone-950 bg-[#e0e7ff] text-stone-950 text-[10px] font-mono flex items-center gap-1.5">
-                <span className="px-1 bg-stone-950 text-white font-bold uppercase text-[8px]">live</span>
-                <span className="truncate" title={match.oddsSource}>
-                  📊 {match.oddsSource} — real-time via Gamma API
+            {/* Traded market — real Polymarket quote when the feed is live */}
+            <div className="mt-2 px-3 py-1.5 border-2 border-stone-950 bg-[#e0e7ff] text-stone-950 text-[10px] font-mono flex items-center gap-2">
+              {match?.oddsSource ? (
+                <>
+                  <span className="px-1 bg-stone-950 text-white font-bold uppercase text-[8px] shrink-0">live</span>
+                  <span className="truncate" title={match.oddsSource}>📊 {match.oddsSource.replace('Polymarket: ', '')}</span>
+                  <span className="ml-auto shrink-0 font-bold">
+                    YES <span className="text-emerald-700">${match.odds.home.toFixed(3)}</span> · NO{' '}
+                    <span className="text-rose-700">${match.odds.away.toFixed(3)}</span>
+                  </span>
+                  <span className="text-[8px] opacity-50 shrink-0">Polymarket · Gamma</span>
+                </>
+              ) : (
+                <span className="opacity-60">
+                  📊 Market: simulated odds — YES ${match ? match.odds.home.toFixed(3) : '—'} · NO $
+                  {match ? match.odds.away.toFixed(3) : '—'}
                 </span>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Pitch */}
             <div className="my-4 relative overflow-hidden h-36 flex flex-col justify-between p-3 border border-2 border-stone-950 bg-[#166534]">
