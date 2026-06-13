@@ -1,16 +1,19 @@
 /**
- * Compile contracts/MockPredictionMarket.sol with solc-js (no Hardhat needed
- * for a single demo contract) and emit ABI + bytecode to server/abi/.
+ * Compile the project's Solidity contracts with solc-js (no Hardhat needed for
+ * a couple of self-contained contracts) and emit ABI + bytecode to server/abi/.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import solc from 'solc';
 
-const source = readFileSync('contracts/MockPredictionMarket.sol', 'utf8');
+const CONTRACTS = ['MockPredictionMarket', 'AgentNFA'];
+
+const sources: Record<string, { content: string }> = {};
+for (const c of CONTRACTS) sources[`${c}.sol`] = { content: readFileSync(`contracts/${c}.sol`, 'utf8') };
 
 const input = {
   language: 'Solidity',
-  sources: { 'MockPredictionMarket.sol': { content: source } },
+  sources,
   settings: {
     optimizer: { enabled: true, runs: 200 },
     outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object'] } },
@@ -28,10 +31,12 @@ for (const w of (output.errors ?? []).filter((e: { severity: string }) => e.seve
   console.warn(w.formattedMessage);
 }
 
-const contract = output.contracts['MockPredictionMarket.sol'].MockPredictionMarket;
 mkdirSync('server/abi', { recursive: true });
-writeFileSync(
-  'server/abi/MockPredictionMarket.json',
-  JSON.stringify({ abi: contract.abi, bytecode: `0x${contract.evm.bytecode.object}` }, null, 2),
-);
-console.log(`compiled ✓  abi entries=${contract.abi.length}  bytecode=${contract.evm.bytecode.object.length / 2} bytes`);
+for (const c of CONTRACTS) {
+  const contract = output.contracts[`${c}.sol`][c];
+  writeFileSync(
+    `server/abi/${c}.json`,
+    JSON.stringify({ abi: contract.abi, bytecode: `0x${contract.evm.bytecode.object}` }, null, 2),
+  );
+  console.log(`compiled ${c} ✓  abi entries=${contract.abi.length}  bytecode=${contract.evm.bytecode.object.length / 2} bytes`);
+}

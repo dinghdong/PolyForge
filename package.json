@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "server": "NODE_USE_ENV_PROXY=1 tsx server/index.ts",
     "compile:contracts": "tsx scripts/compile.ts",
-    "deploy:market": "tsx scripts/deploy-market.ts"
+    "deploy:market": "tsx scripts/deploy-market.ts",
+    "deploy:nfa": "NODE_USE_ENV_PROXY=1 tsx scripts/deploy-nfa.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
