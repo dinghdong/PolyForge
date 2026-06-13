@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Cpu, ShieldCheck, Users, ExternalLink, RefreshCw, Layers, Activity } from 'lucide-react';
+import { TrendingUp, Cpu, ShieldCheck, Users, ExternalLink, RefreshCw, Activity, Lock } from 'lucide-react';
 import { StyleId } from '../types';
 import { THEME_PRESETS } from '../styles';
 import { api, type AgentNFAEntry } from '../lib/api';
@@ -120,6 +120,11 @@ export default function ExploreSignals({ styleId, onDeployCopyAgent, activeCopie
                             <span className="text-[8.5px] px-1 bg-stone-950 text-white font-mono font-black rounded uppercase shrink-0">
                               {a.model.split('-')[0]}
                             </span>
+                            {!a.copyable && (
+                              <span className="text-[8px] px-1 py-0.5 bg-rose-200 border border-stone-950 font-mono font-black uppercase shrink-0 flex items-center gap-0.5">
+                                <Lock className="w-2.5 h-2.5" /> Private
+                              </span>
+                            )}
                           </div>
                           <a
                             href={nfaContract ? SEPOLIA_NFA(nfaContract, a.tokenId) : '#'}
@@ -235,12 +240,19 @@ export default function ExploreSignals({ styleId, onDeployCopyAgent, activeCopie
             <button
               type="button"
               onClick={handleCopy}
-              disabled={!active}
-              className="w-full py-3 font-mono font-black uppercase text-[10.5px] border-2 bg-[#fae155] text-stone-950 border-stone-950 hover:bg-[#ebd01c] shadow-[2.5px_2.5px_0px_#000] rounded-none cursor-pointer transition-all disabled:opacity-40"
+              disabled={!active || !active.copyable}
+              title={active && !active.copyable ? 'This agent is private (owner-only) — gated on-chain' : undefined}
+              className="w-full py-3 font-mono font-black uppercase text-[10.5px] border-2 bg-[#fae155] text-stone-950 border-stone-950 hover:bg-[#ebd01c] shadow-[2.5px_2.5px_0px_#000] rounded-none cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
             >
-              🚀 {activeCopiedAgent ? 'Reconfigure Copy' : 'Copy this Agent'}
+              {active && !active.copyable ? (
+                <>
+                  <Lock className="w-3.5 h-3.5" /> Private — owner only
+                </>
+              ) : (
+                <>🚀 {activeCopiedAgent ? 'Reconfigure Copy' : 'Copy this Agent'}</>
+              )}
             </button>
-            {activeCopiedAgent && (
+            {activeCopiedAgent && active?.copyable && (
               <p className="text-[9px] text-emerald-600 font-bold text-center mt-2.5 font-mono">
                 ✓ Copying ({activeCopiedAgent}) — sign the mandate to go live
               </p>

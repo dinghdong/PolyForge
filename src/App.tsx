@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Github,
   Zap,
+  Globe,
   CheckCircle2
 } from 'lucide-react';
 
@@ -58,6 +59,7 @@ export default function App() {
   const [activeCopiedAgent, setActiveCopiedAgent] = useState<string | null>(null);
   const [registry, setRegistry] = useState<AgentNFAEntry[]>([]);
   const [agentName, setAgentName] = useState('World Cup Underdog Hunter');
+  const [mintCopyable, setMintCopyable] = useState(true); // public by default
   const [minting, setMinting] = useState(false);
   const [mintMsg, setMintMsg] = useState('');
 
@@ -79,7 +81,7 @@ export default function App() {
     setMinting(true);
     setMintMsg('');
     try {
-      const r = await api.mintAgent({ label: agentName, model: config.modelId, prompt: config.prompt, creator: walletAddress ?? undefined });
+      const r = await api.mintAgent({ label: agentName, model: config.modelId, prompt: config.prompt, creator: walletAddress ?? undefined, copyable: mintCopyable });
       setMintMsg(`✓ Minted AgentNFA #${r.tokenId}`);
       setConfig((p) => ({ ...p, agentId: r.tokenId, agentLabel: agentName }));
       await api.getRegistry().then(setRegistry).catch(() => {});
@@ -263,75 +265,123 @@ export default function App() {
               </div>
             </div>
 
-            {/* Agent identity (NFA) — two clear paths: run an existing NFA, or build+mint a new one */}
-            <div className="p-4 border-2 border-stone-950 bg-white shadow-[4px_4px_0px_#000] rounded-none space-y-3">
-              <div className="flex flex-col lg:flex-row lg:items-end gap-3">
-                <div className="flex-1 min-w-0">
-                  <label className="text-[10px] font-bold uppercase tracking-wider opacity-60 block mb-1 font-mono">
-                    Agent Identity
-                  </label>
+            {/* ───── STEP 1 · Create your AI Agent (brain + identity + policies = the NFA) ───── */}
+            <div className="flex items-center gap-2 pt-1">
+              <span className="w-6 h-6 flex items-center justify-center font-black text-xs border-2 border-stone-950 bg-[#fae155] rounded-none shadow-[2px_2px_0px_#000]">1</span>
+              <h3 className="text-sm font-black uppercase tracking-tight font-display">Create your AI Agent</h3>
+              <span className="text-[10px] opacity-50 font-mono hidden sm:inline">brain + identity + policies → an AgentNFA</span>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+              {/* brain */}
+              <AIBrainConfig config={config} onChange={handleConfigChange} styleId={styleId} />
+
+              {/* identity + policies */}
+              <div className={`${t.cardBg} flex flex-col gap-3`}>
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8.5 h-8.5 rounded-lg flex items-center justify-center shrink-0 border-2 border-stone-950 bg-[#fae155]">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className={`text-xs font-bold uppercase tracking-wider ${t.titleText}`}>Identity & Policies</h3>
+                    <p className="text-[10px] opacity-60">ERC-721 AgentNFA · on-chain DID</p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider opacity-60 block mb-1 font-mono">Agent</label>
                   <select
                     value={config.agentId ?? ''}
                     onChange={(e) => handlePickAgent(e.target.value ? Number(e.target.value) : 0)}
                     className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
                   >
-                    <option value="">✚ New agent — configure a fresh brain below</option>
+                    <option value="">✚ New agent — configure the brain ←</option>
                     {registry.map((a) => (
                       <option key={a.tokenId} value={a.tokenId}>
-                        ▶ Run NFA #{a.tokenId} · {a.label} · {a.model} · {a.activity.positions} bets
+                        ▶ Run NFA #{a.tokenId} · {a.label}{a.copyable ? '' : ' 🔒'} · {a.activity.positions} bets
                       </option>
                     ))}
                   </select>
                 </div>
+
+                {config.agentId ? (
+                  <div className="flex items-start gap-2 text-[11px] font-mono bg-[#a7f3d0] border-2 border-stone-950 rounded-none px-3 py-2">
+                    <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Running <strong>AgentNFA #{config.agentId}</strong> — brain loaded. Set the mandate in Step 2, then{' '}
+                      <strong>Confirm Launch ↓</strong>. Already on-chain — no minting.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 border-t border-current/15 pt-2.5">
+                    <div>
+                      <label className="text-[9px] font-bold uppercase tracking-wider opacity-50 block mb-1 font-mono">Name</label>
+                      <input
+                        value={agentName}
+                        onChange={(e) => setAgentName(e.target.value)}
+                        className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
+                        placeholder="World Cup Underdog Hunter"
+                      />
+                    </div>
+
+                    {/* Policies (creation-time, written to the NFA) */}
+                    <div className="space-y-2">
+                      <span className="text-[9px] font-bold uppercase tracking-wider opacity-50 block font-mono">Agent Policies</span>
+                      {/* gating — REAL */}
+                      <button
+                        type="button"
+                        onClick={() => setMintCopyable((v) => !v)}
+                        className="w-full flex items-center justify-between gap-2 border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white text-[10px] font-mono cursor-pointer"
+                        title="Public agents can be copied by anyone; private agents are gated to the owner on-chain"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          {mintCopyable ? <Globe className="w-3.5 h-3.5 text-blue-600" /> : <Lock className="w-3.5 h-3.5 text-rose-600" />}
+                          Gated execution: <strong>{mintCopyable ? 'Public (copyable)' : 'Private (owner-only)'}</strong>
+                        </span>
+                        <span className={`px-1.5 py-0.5 border border-stone-950 font-bold uppercase ${mintCopyable ? 'bg-[#a7f3d0]' : 'bg-rose-200'}`}>
+                          {mintCopyable ? 'on-chain' : 'on-chain'}
+                        </span>
+                      </button>
+                      {/* fees / restrictions — ROADMAP (disabled, honestly labeled) */}
+                      <div className="flex items-center justify-between gap-2 border-2 border-dashed border-current/30 rounded-none px-2.5 py-2 text-[10px] font-mono opacity-55">
+                        <span className="flex items-center gap-1.5"><Coins className="w-3.5 h-3.5" /> Copy / performance fee</span>
+                        <span className="px-1.5 py-0.5 border border-current/30 font-bold uppercase">roadmap</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 border-2 border-dashed border-current/30 rounded-none px-2.5 py-2 text-[10px] font-mono opacity-55">
+                        <span className="flex items-center gap-1.5"><ShieldAlert className="w-3.5 h-3.5" /> Allowlisted markets / max drawdown</span>
+                        <span className="px-1.5 py-0.5 border border-current/30 font-bold uppercase">roadmap</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleMint}
+                        disabled={minting}
+                        title="Mint this brain as an AgentNFA (operator-funded). Optional — you can also launch without minting."
+                        className="flex-1 py-2 px-4 text-[11px] font-bold uppercase font-mono cursor-pointer bg-blue-300 hover:bg-blue-400 border-2 border-stone-950 rounded-none shadow-[2px_2px_0px_#000] disabled:opacity-50 flex items-center justify-center gap-1.5"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        {minting ? 'Minting…' : 'Mint as NFA (optional)'}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {mintMsg && (
-                  <span className={`text-[10px] font-mono self-center ${mintMsg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-600'}`}>{mintMsg}</span>
+                  <span className={`text-[10px] font-mono ${mintMsg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-600'}`}>{mintMsg}</span>
                 )}
               </div>
-
-              {config.agentId ? (
-                /* existing NFA selected → just configure guardrails below and launch */
-                <div className="flex items-center gap-2 text-[11px] font-mono bg-[#a7f3d0] border-2 border-stone-950 rounded-none px-3 py-2">
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
-                  <span>
-                    Running <strong>AgentNFA #{config.agentId}</strong> — its brain is loaded. Set guardrails below, then{' '}
-                    <strong>Confirm Launch ↓</strong>. No minting needed; it's already on-chain.
-                  </span>
-                </div>
-              ) : (
-                /* new brain → optionally mint it as an NFA before/after launch */
-                <div className="flex flex-col sm:flex-row sm:items-end gap-3 border-t border-current/15 pt-3">
-                  <div className="flex-1 min-w-0">
-                    <label className="text-[9px] font-bold uppercase tracking-wider opacity-50 block mb-1 font-mono">Name (optional — to mint as NFA)</label>
-                    <input
-                      value={agentName}
-                      onChange={(e) => setAgentName(e.target.value)}
-                      className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
-                      placeholder="World Cup Underdog Hunter"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleMint}
-                    disabled={minting}
-                    title="Optional: mint this brain as an AgentNFA so it's discoverable & copyable. You can also just Confirm Launch below without minting."
-                    className="py-2 px-4 text-[11px] font-bold uppercase font-mono cursor-pointer bg-blue-300 hover:bg-blue-400 border-2 border-stone-950 rounded-none shadow-[2px_2px_0px_#000] disabled:opacity-50 flex items-center gap-1.5 shrink-0"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    {minting ? 'Minting…' : 'Mint as NFA (optional)'}
-                  </button>
-                </div>
-              )}
             </div>
 
-            {/* Standard 3-Column Configuration Studio Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-              {/* Column 1: AI Brain */}
-              <AIBrainConfig config={config} onChange={handleConfigChange} styleId={styleId} />
+            {/* ───── STEP 2 · Launch a Mandate (this run's guardrails + execution) ───── */}
+            <div className="flex items-center gap-2 pt-2">
+              <span className="w-6 h-6 flex items-center justify-center font-black text-xs border-2 border-stone-950 bg-[#fae155] rounded-none shadow-[2px_2px_0px_#000]">2</span>
+              <h3 className="text-sm font-black uppercase tracking-tight font-display">Launch a Mandate</h3>
+              <span className="text-[10px] opacity-50 font-mono hidden sm:inline">your guardrails + execution for this run</span>
+            </div>
 
-              {/* Column 2: Guardrails */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
               <GuardrailConfig config={config} onChange={handleConfigChange} styleId={styleId} />
-
-              {/* Column 3: Execution Hub */}
               <ExecutionHubConfig config={config} onChange={handleConfigChange} styleId={styleId} />
             </div>
 

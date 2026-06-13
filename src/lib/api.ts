@@ -93,7 +93,7 @@ export const api = {
     expiryDate: string;
     copyTrade?: boolean;
   }) => post('/api/agents', cfg),
-  mintAgent: (a: { label: string; model: string; prompt: string; creator?: string }) =>
+  mintAgent: (a: { label: string; model: string; prompt: string; creator?: string; copyable?: boolean }) =>
     post<{ ok: boolean; tokenId: number; txHash: string }>('/api/agents/mint', a),
   getRegistry: async (): Promise<AgentNFAEntry[]> => {
     const res = await fetch('/api/agents/registry');
