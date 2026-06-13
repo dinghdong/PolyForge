@@ -10,9 +10,9 @@ import { getAddress, parseAbi, keccak256, toHex } from 'viem';
 import { CHAIN, CHAIN_ID, publicClient, type ChainContext } from './chain';
 
 export const AGENT_NFA_ABI = parseAbi([
-  'function mint(address to, string label, string model, bytes32 configHash) returns (uint256)',
+  'function mint(address to, string label, string model, bytes32 configHash, bool copyable) returns (uint256)',
   'function agentCount() view returns (uint256)',
-  'function agents(uint256) view returns (address creator, string label, string model, bytes32 configHash, uint64 createdAt)',
+  'function agents(uint256) view returns (address creator, string label, string model, bytes32 configHash, uint64 createdAt, bool copyable)',
   'function ownerOf(uint256) view returns (address)',
   'function did(uint256) view returns (string)',
 ]);
@@ -26,6 +26,7 @@ export type AgentBrain = {
   configHash: `0x${string}`;
   did: string;
   createdAt: number;
+  copyable: boolean; // true = public (anyone can run/copy); false = private (owner only)
 };
 
 const nfaAddress = (): `0x${string}` => {
@@ -33,6 +34,20 @@ const nfaAddress = (): `0x${string}` => {
   if (!a) throw new Error('AGENT_NFA_ADDRESS not set — run npm run deploy:nfa');
   return getAddress(a);
 };
+
+/** retry transient RPC/proxy hiccups ("HTTP request failed") on chain reads */
+async function readRetry<T>(fn: () => Promise<T>, tries = 3): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastError = e;
+      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastError;
+}
 
 /** prompts are off-chain; remember them per tokenId as agents are minted/seen */
 const promptByToken = new Map<number, string>();
@@ -46,14 +61,14 @@ export function configHashFor(model: string, prompt: string): `0x${string}` {
 
 export async function readAgents(): Promise<AgentBrain[]> {
   const addr = nfaAddress();
-  const count = Number(await publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'agentCount' }));
+  const count = Number(await readRetry(() => publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'agentCount' })));
   const out: AgentBrain[] = [];
   for (let tokenId = 1; tokenId <= count; tokenId++) {
     const [a, did] = await Promise.all([
-      publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'agents', args: [BigInt(tokenId)] }) as Promise<
-        readonly [`0x${string}`, string, string, `0x${string}`, bigint]
+      readRetry(() => publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'agents', args: [BigInt(tokenId)] })) as Promise<
+        readonly [`0x${string}`, string, string, `0x${string}`, bigint, boolean]
       >,
-      publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'did', args: [BigInt(tokenId)] }) as Promise<string>,
+      readRetry(() => publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'did', args: [BigInt(tokenId)] })) as Promise<string>,
     ]);
     out.push({
       tokenId,
@@ -64,6 +79,7 @@ export async function readAgents(): Promise<AgentBrain[]> {
       configHash: a[3],
       did,
       createdAt: Number(a[4]),
+      copyable: a[5],
     });
   }
   return out;
@@ -80,9 +96,11 @@ export async function mintAgent(
   label: string,
   model: string,
   prompt: string,
+  copyable: boolean,
 ): Promise<{ tokenId: number; txHash: `0x${string}` }> {
   const { createWalletClient, http } = await import('viem');
-  const wallet = createWalletClient({ chain: CHAIN, transport: http(), account: ctx.agentA });
+  const { SEPOLIA_RPC } = await import('./chain');
+  const wallet = createWalletClient({ chain: CHAIN, transport: http(SEPOLIA_RPC), account: ctx.agentA });
   const addr = nfaAddress();
   const txHash = await wallet.writeContract({
     chain: CHAIN,
@@ -90,7 +108,7 @@ export async function mintAgent(
     address: addr,
     abi: AGENT_NFA_ABI,
     functionName: 'mint',
-    args: [creator, label, model, configHashFor(model, prompt)],
+    args: [creator, label, model, configHashFor(model, prompt), copyable],
   });
   await publicClient.waitForTransactionReceipt({ hash: txHash });
   const tokenId = Number(await publicClient.readContract({ address: addr, abi: AGENT_NFA_ABI, functionName: 'agentCount' }));

@@ -42,7 +42,10 @@ loadEnv({ path: '.env.local' });
 
 export const CHAIN = sepolia;
 export const CHAIN_ID = sepolia.id;
-export const publicClient = createPublicClient({ chain: CHAIN, transport: http() });
+// pin a reliable Sepolia RPC — viem's default round-robin hits endpoints that
+// don't see freshly-deployed contracts (agentCount returned 0x) or reject calls
+export const SEPOLIA_RPC = process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com';
+export const publicClient = createPublicClient({ chain: CHAIN, transport: http(SEPOLIA_RPC) });
 
 export const MARKET_ABI = parseAbi([
   'function createMarket(string question, string outcomeA, string outcomeB, uint64 closesAt) returns (uint256)',
@@ -139,7 +142,7 @@ export async function getHeadlessRoot(ctx: ChainContext): Promise<Delegation> {
  * money rail stays 100% relayer-redeemed and gasless.
  */
 const operatorWallet = (ctx: ChainContext) =>
-  createWalletClient({ chain: CHAIN, transport: http(), account: ctx.agentA });
+  createWalletClient({ chain: CHAIN, transport: http(SEPOLIA_RPC), account: ctx.agentA });
 
 export async function recordBetDirect(ctx: ChainContext, intent: BetIntent): Promise<`0x${string}`> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');

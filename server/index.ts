@@ -39,6 +39,21 @@ const PORT = Number(process.env.PORT ?? 8788);
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
+// demo resilience: a transient RPC/proxy hiccup must never kill the server
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  try {
+    pushLog('system', 'warning', `unhandled rejection (ignored): ${msg.slice(0, 140)}`);
+  } catch {
+    // eslint-disable-next-line no-console
+    console.error('unhandledRejection:', msg.slice(0, 200));
+  }
+});
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('uncaughtException (kept alive):', err.message?.slice(0, 200));
+});
+
 let ctx: ChainContext;
 
 marketSignals.on('board', (board: BoardSnapshot) => pushBoard(board));
@@ -130,9 +145,10 @@ app.post('/api/agents/mint', async (req, res) => {
     const label = String(b.label ?? 'Untitled Agent').slice(0, 64);
     const model = String(b.model ?? 'venice-llama3-70b');
     const prompt = String(b.prompt ?? '');
-    pushLog('system', 'info', `minting AgentNFA "${label}" → ${creator.slice(0, 10)}… (operator-funded)`);
-    const { tokenId, txHash } = await mintAgent(ctx, creator, label, model, prompt);
-    pushLog('contract', 'success', `AgentNFA #${tokenId} "${label}" minted — https://sepolia.etherscan.io/tx/${txHash}`);
+    const copyable = b.copyable === undefined ? true : Boolean(b.copyable); // public by default
+    pushLog('system', 'info', `minting AgentNFA "${label}" → ${creator.slice(0, 10)}… (${copyable ? 'public' : 'private'}, operator-funded)`);
+    const { tokenId, txHash } = await mintAgent(ctx, creator, label, model, prompt, copyable);
+    pushLog('contract', 'success', `AgentNFA #${tokenId} "${label}" minted (${copyable ? 'public' : 'private'}) — https://sepolia.etherscan.io/tx/${txHash}`);
     res.json({ ok: true, tokenId, txHash });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });
@@ -177,11 +193,26 @@ app.post('/api/agents', async (req, res) => {
 
 app.post('/api/agents/activate', async (req, res) => {
   try {
-    if (!getAgentConfig()) {
+    const cfg = getAgentConfig();
+    if (!cfg) {
       res.status(400).json({ ok: false, error: 'save agent config first' });
       return;
     }
     const mode = (req.body?.mode as string) ?? 'headless';
+    // who is about to run this mandate
+    const runner = (mode === 'browser' ? getBrowserDelegator() : ctx.userSmartAccount.address) ?? ctx.userSmartAccount.address;
+
+    // gated execution: a private (non-copyable) agent can only be run by its owner
+    if (cfg.agentId !== undefined) {
+      const brain = await getAgent(cfg.agentId);
+      if (brain && !brain.copyable && runner.toLowerCase() !== brain.owner.toLowerCase()) {
+        pushLog('guardrail', 'error', `BLOCKED: AgentNFA #${cfg.agentId} "${brain.label}" is private — only its owner (${brain.owner.slice(0, 10)}…) can run it`);
+        res.status(403).json({ ok: false, error: `Agent #${cfg.agentId} is private (gated to its owner). Pick a public agent or mint your own.` });
+        return;
+      }
+      if (brain) pushLog('guardrail', 'success', `gate check OK — AgentNFA #${cfg.agentId} is ${brain.copyable ? 'public' : 'owner-run'} (runner ${runner.slice(0, 10)}…)`);
+    }
+
     if (mode === 'browser') {
       const context = req.body?.permissionContext as `0x${string}` | undefined;
       if (!context) {

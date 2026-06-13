@@ -17,7 +17,14 @@ contract AgentNFA {
         string model;       // venice model id used by the brain
         bytes32 configHash;  // keccak of the full brain config (prompt + params)
         uint64 createdAt;
+        bool copyable;       // true = public (anyone can run/copy); false = private (owner only)
     }
+
+    // TODO (Agent-Fi roadmap): copy fee bps + performance fee bps per agent,
+    // accrued to the NFA owner via a MasterChef-style splitter on each followed
+    // bet; on-chain prompt commitment expansion (encrypted, owner-decryptable).
+    // mapping(uint256 => uint16) public copyFeeBps;
+    // mapping(uint256 => uint16) public performanceFeeBps;
 
     uint256 public agentCount; // tokenIds are 1..agentCount (0 is invalid)
     mapping(uint256 => Agent) public agents;
@@ -35,17 +42,24 @@ contract AgentNFA {
 
     /// @notice Mint a new agent identity to `to`. Caller can be a backend
     /// operator minting on the creator's behalf; `creator`/owner is `to`.
-    function mint(address to, string calldata label, string calldata model, bytes32 configHash)
+    /// @param copyable true = public (anyone can run/copy), false = private (owner only).
+    function mint(address to, string calldata label, string calldata model, bytes32 configHash, bool copyable)
         external
         returns (uint256 tokenId)
     {
         require(to != address(0), "zero to");
         tokenId = ++agentCount;
-        agents[tokenId] = Agent(to, label, model, configHash, uint64(block.timestamp));
+        agents[tokenId] = Agent(to, label, model, configHash, uint64(block.timestamp), copyable);
         _owners[tokenId] = to;
         _balances[to] += 1;
         emit Transfer(address(0), to, tokenId);
         emit AgentMinted(tokenId, to, label, model, configHash);
+    }
+
+    /// @notice Owner toggles public/private (gated execution).
+    function setCopyable(uint256 tokenId, bool copyable) external {
+        require(msg.sender == ownerOf(tokenId), "not owner");
+        agents[tokenId].copyable = copyable;
     }
 
     /// @notice On-chain decentralized identifier for an agent.

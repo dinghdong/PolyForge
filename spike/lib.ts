@@ -15,7 +15,10 @@ export const RELAYER_URL = 'https://relayer.1shotapi.dev/relayers';
 export const CHAIN = sepolia;
 export const CHAIN_ID = sepolia.id; // 11155111
 
-export const publicClient = createPublicClient({ chain: CHAIN, transport: http() });
+// pin a reliable Sepolia RPC — viem's default round-robin can hit endpoints
+// (e.g. thirdweb) that reject deploy/estimateGas with "invalid parameters"
+export const SEPOLIA_RPC = process.env.SEPOLIA_RPC ?? 'https://ethereum-sepolia-rpc.publicnode.com';
+export const publicClient = createPublicClient({ chain: CHAIN, transport: http(SEPOLIA_RPC) });
 
 type JsonRpc<T> =
   | { jsonrpc: '2.0'; id: number | string; result: T }
