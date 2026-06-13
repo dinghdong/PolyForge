@@ -263,51 +263,63 @@ export default function App() {
               </div>
             </div>
 
-            {/* Agent identity (NFA) — pick an existing brain or mint this config as one */}
-            <div className="p-4 border-2 border-stone-950 bg-white shadow-[4px_4px_0px_#000] rounded-none flex flex-col lg:flex-row lg:items-end gap-3">
-              <div className="flex-1 min-w-0">
-                <label className="text-[10px] font-bold uppercase tracking-wider opacity-60 block mb-1 font-mono">
-                  Agent Identity — pick a minted NFA brain
-                </label>
-                <select
-                  value={config.agentId ?? ''}
-                  onChange={(e) => handlePickAgent(e.target.value ? Number(e.target.value) : 0)}
-                  className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
-                >
-                  <option value="">— New agent (configure below, then mint) —</option>
-                  {registry.map((a) => (
-                    <option key={a.tokenId} value={a.tokenId}>
-                      #{a.tokenId} · {a.label} · {a.model} · {a.activity.positions} bets
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex-1 min-w-0">
-                <label className="text-[10px] font-bold uppercase tracking-wider opacity-60 block mb-1 font-mono">Name (for minting)</label>
-                <input
-                  value={agentName}
-                  onChange={(e) => setAgentName(e.target.value)}
-                  className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
-                  placeholder="World Cup Underdog Hunter"
-                />
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleMint}
-                  disabled={minting}
-                  title="Mint the current AI Brain config as an AgentNFA (ERC-721) — operator-funded"
-                  className="py-2 px-4 text-[11px] font-bold uppercase font-mono cursor-pointer bg-blue-300 hover:bg-blue-400 border-2 border-stone-950 rounded-none shadow-[2px_2px_0px_#000] disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  {minting ? 'Minting…' : 'Mint as NFA'}
-                </button>
-                {config.agentId && (
-                  <span className="text-[10px] font-mono font-bold px-2 py-1 border-2 border-stone-950 bg-[#a7f3d0] rounded-none">NFA #{config.agentId}</span>
+            {/* Agent identity (NFA) — two clear paths: run an existing NFA, or build+mint a new one */}
+            <div className="p-4 border-2 border-stone-950 bg-white shadow-[4px_4px_0px_#000] rounded-none space-y-3">
+              <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+                <div className="flex-1 min-w-0">
+                  <label className="text-[10px] font-bold uppercase tracking-wider opacity-60 block mb-1 font-mono">
+                    Agent Identity
+                  </label>
+                  <select
+                    value={config.agentId ?? ''}
+                    onChange={(e) => handlePickAgent(e.target.value ? Number(e.target.value) : 0)}
+                    className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
+                  >
+                    <option value="">✚ New agent — configure a fresh brain below</option>
+                    {registry.map((a) => (
+                      <option key={a.tokenId} value={a.tokenId}>
+                        ▶ Run NFA #{a.tokenId} · {a.label} · {a.model} · {a.activity.positions} bets
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {mintMsg && (
+                  <span className={`text-[10px] font-mono self-center ${mintMsg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-600'}`}>{mintMsg}</span>
                 )}
               </div>
-              {mintMsg && (
-                <span className={`text-[10px] font-mono ${mintMsg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-600'} self-center`}>{mintMsg}</span>
+
+              {config.agentId ? (
+                /* existing NFA selected → just configure guardrails below and launch */
+                <div className="flex items-center gap-2 text-[11px] font-mono bg-[#a7f3d0] border-2 border-stone-950 rounded-none px-3 py-2">
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>
+                    Running <strong>AgentNFA #{config.agentId}</strong> — its brain is loaded. Set guardrails below, then{' '}
+                    <strong>Confirm Launch ↓</strong>. No minting needed; it's already on-chain.
+                  </span>
+                </div>
+              ) : (
+                /* new brain → optionally mint it as an NFA before/after launch */
+                <div className="flex flex-col sm:flex-row sm:items-end gap-3 border-t border-current/15 pt-3">
+                  <div className="flex-1 min-w-0">
+                    <label className="text-[9px] font-bold uppercase tracking-wider opacity-50 block mb-1 font-mono">Name (optional — to mint as NFA)</label>
+                    <input
+                      value={agentName}
+                      onChange={(e) => setAgentName(e.target.value)}
+                      className="w-full font-mono text-xs border-2 border-stone-950 rounded-none px-2.5 py-2 bg-white"
+                      placeholder="World Cup Underdog Hunter"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleMint}
+                    disabled={minting}
+                    title="Optional: mint this brain as an AgentNFA so it's discoverable & copyable. You can also just Confirm Launch below without minting."
+                    className="py-2 px-4 text-[11px] font-bold uppercase font-mono cursor-pointer bg-blue-300 hover:bg-blue-400 border-2 border-stone-950 rounded-none shadow-[2px_2px_0px_#000] disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    {minting ? 'Minting…' : 'Mint as NFA (optional)'}
+                  </button>
+                </div>
               )}
             </div>
 
