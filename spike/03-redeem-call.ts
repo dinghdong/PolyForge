@@ -65,8 +65,8 @@ async function testChain(
 
   const leafMax = batch ? feeAmount + workAmount : workAmount;
   const leafScope = leafFnCall
-    ? ({ type: ScopeType.FunctionCall, targets: [usdc], selectors: [TRANSFER_SEL] } as const)
-    : ({ type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: leafMax } as const);
+    ? { type: ScopeType.FunctionCall, targets: [usdc], selectors: [TRANSFER_SEL] }
+    : { type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: leafMax };
   const leaf = createDelegation({
     to: caps.targetAddress,
     from: accounts.agentA.address,
