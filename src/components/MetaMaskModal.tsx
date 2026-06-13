@@ -35,6 +35,7 @@ export default function MetaMaskModal({ isOpen, onClose, onApprove, config, copy
 
   const saveConfig = () =>
     api.saveAgentConfig({
+      agentId: config.agentId,
       modelId: config.modelId,
       prompt: config.prompt,
       maxSpendPerMatch: config.maxSpendPerMatch,

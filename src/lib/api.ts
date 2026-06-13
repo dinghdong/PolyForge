@@ -71,8 +71,21 @@ async function post<T = { ok: boolean }>(path: string, body?: unknown): Promise<
   return json;
 }
 
+export type AgentNFAEntry = {
+  tokenId: number;
+  label: string;
+  model: string;
+  prompt: string;
+  owner: string;
+  configHash: string;
+  did: string;
+  createdAt: number;
+  activity: { positions: number; volumeUsdc: number; openPositions: number; lastMarket?: string };
+};
+
 export const api = {
   saveAgentConfig: (cfg: {
+    agentId?: number;
     modelId: string;
     prompt: string;
     maxSpendPerMatch: number;
@@ -80,6 +93,12 @@ export const api = {
     expiryDate: string;
     copyTrade?: boolean;
   }) => post('/api/agents', cfg),
+  mintAgent: (a: { label: string; model: string; prompt: string; creator?: string }) =>
+    post<{ ok: boolean; tokenId: number; txHash: string }>('/api/agents/mint', a),
+  getRegistry: async (): Promise<AgentNFAEntry[]> => {
+    const res = await fetch('/api/agents/registry');
+    return (await res.json()) as AgentNFAEntry[];
+  },
   activateHeadless: () => post('/api/agents/activate', { mode: 'headless' }),
   activateBrowser: (permissionContext: string) => post('/api/agents/activate', { mode: 'browser', permissionContext }),
   deactivate: () => post('/api/agents/deactivate'),

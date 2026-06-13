@@ -8,6 +8,8 @@ export type RelayerMode = '1shot' | 'standard';
 export type StyleId = 'brutalist';
 
 export interface AgentConfig {
+  agentId?: number; // AgentNFA tokenId this mandate runs (undefined = ad-hoc brain)
+  agentLabel?: string;
   modelId: ModelId;
   prompt: string;
   knowledgeFileName: string;
