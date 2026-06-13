@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# runtime artifact — a signed 7715 grant, not for the repo
+spike/last-grant.json
