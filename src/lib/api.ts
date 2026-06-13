@@ -35,6 +35,9 @@ export type BoardSnapshot = {
 
 export type ServerPosition = {
   id: string;
+  mandateId?: string;
+  agentId?: number;
+  agentLabel?: string;
   marketName: string;
   polymarketUrl?: string;
   selectedOutcome: 'YES' | 'NO';
@@ -47,9 +50,28 @@ export type ServerPosition = {
   rail: 'star' | 'follower';
 };
 
+export type MandateView = {
+  id: string;
+  agentId?: number;
+  agentLabel?: string;
+  modelId: string;
+  mode: 'headless' | 'browser';
+  active: boolean;
+  maxSpendPerMatch: number;
+  maxDailyAllowance: number;
+  expiryDate: string;
+  copyTrade: boolean;
+  spentToday: number;
+  budgetLeftUsdc: number;
+  createdAt: number;
+  positions: number;
+  openPositions: number;
+};
+
 export type ServerState = {
+  mandates: MandateView[];
+  activeCount: number;
   agentActive: boolean;
-  agentConfig?: unknown;
   spentTodayUsdc: number;
   budgetLeftUsdc: number;
   positions: ServerPosition[];
@@ -102,6 +124,7 @@ export const api = {
   activateHeadless: () => post('/api/agents/activate', { mode: 'headless' }),
   activateBrowser: (permissionContext: string) => post('/api/agents/activate', { mode: 'browser', permissionContext }),
   deactivate: () => post('/api/agents/deactivate'),
+  stopMandate: (id: string) => post(`/api/mandates/${id}/stop`),
   injectDislocation: (slug: string) => post('/api/markets/inject', { slug }),
   getState: async (): Promise<ServerState> => {
     const res = await fetch('/api/state');

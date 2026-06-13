@@ -54,25 +54,72 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
         <div className="flex items-center gap-3">
           <div
             className={`flex items-center gap-1.5 py-1 px-3.5 text-[11px] font-mono font-bold border rounded-none border-stone-950 text-stone-950 ${
-              state?.agentActive ? 'bg-[#a7f3d0] animate-pulse' : 'bg-stone-200'
+              (state?.activeCount ?? 0) > 0 ? 'bg-[#a7f3d0] animate-pulse' : 'bg-stone-200'
             }`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-            {state?.agentActive ? 'Agent ACTIVE — scanning board' : connected ? 'Agent idle' : 'server offline'}
+            {(state?.activeCount ?? 0) > 0
+              ? `${state?.activeCount} AGENT${state?.activeCount === 1 ? '' : 'S'} RUNNING`
+              : connected
+                ? 'idle — launch an agent in the Studio'
+                : 'server offline'}
           </div>
 
-          {state?.agentActive && (
+          {(state?.activeCount ?? 0) > 0 && (
             <button
               type="button"
               onClick={() => void api.deactivate()}
-              title="Stop the agent loop (off-chain). On-chain: revoke the permission in MetaMask."
+              title="Stop ALL mandates. On-chain: revoke the permission in MetaMask."
               className="flex items-center gap-1.5 p-1.5 px-3 text-[11px] font-bold transition-all outline-none bg-rose-200 hover:bg-rose-300 border-2 border-stone-950 text-stone-950 rounded-none shadow-[2px_2px_0px_#000]"
             >
-              <Power className="w-3.5 h-3.5" /> Kill Switch
+              <Power className="w-3.5 h-3.5" /> Stop All
             </button>
           )}
         </div>
       </div>
+
+      {/* Active Mandates — concurrent agents */}
+      {(state?.mandates?.length ?? 0) > 0 && (
+        <div className={`${t.cardBg} !p-4`}>
+          <div className="flex items-center gap-1.5 border-b pb-2 mb-3 border-current/10">
+            <Layers className="w-4 h-4 text-purple-600" />
+            <h4 className="text-xs font-bold uppercase tracking-wider">Running Agents (concurrent mandates)</h4>
+            <span className="text-[10px] opacity-50 font-mono ml-auto">{state?.activeCount} active</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+            {state!.mandates.map((m) => (
+              <div
+                key={m.id}
+                className={`border-2 border-stone-950 rounded-none p-2.5 ${m.active ? 'bg-white' : 'bg-stone-100 opacity-60'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-[11px] truncate flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${m.active ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'}`}></span>
+                      {m.agentLabel ?? m.modelId}
+                      {m.agentId != null && <span className="text-[8px] px-1 border border-stone-950 bg-[#fae155] font-mono">NFA #{m.agentId}</span>}
+                    </div>
+                    <div className="text-[9px] opacity-60 font-mono mt-1">
+                      {m.mode} · {m.openPositions}/{m.positions} open · budget ${m.budgetLeftUsdc.toFixed(2)}
+                      {m.copyTrade && ' · A2A copy'}
+                    </div>
+                  </div>
+                  {m.active && (
+                    <button
+                      type="button"
+                      onClick={() => void api.stopMandate(m.id)}
+                      title="Stop this agent"
+                      className="shrink-0 p-1 border-2 border-stone-950 rounded-none bg-rose-200 hover:bg-rose-300 cursor-pointer"
+                    >
+                      <Power className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Stats Widgets */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -93,7 +140,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
             <TrendingUp className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-[10px] opacity-50 font-mono tracking-tight uppercase font-semibold">Daily Budget Left (7715)</span>
+            <span className="text-[10px] opacity-50 font-mono tracking-tight uppercase font-semibold">Budget Left (all agents)</span>
             <div className="text-sm font-black font-mono leading-none mt-1 text-emerald-600">
               ${(state?.budgetLeftUsdc ?? 0).toFixed(2)} USDC
             </div>
@@ -185,6 +232,11 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
                   <div key={pos.id} className="p-2.5 flex items-center justify-between text-xs border bg-white border-2 border-stone-950 rounded-none text-stone-950">
                     <div className="min-w-0">
                       <div className="font-semibold leading-tight truncate">
+                        {pos.agentLabel && (
+                          <span className="text-[8px] px-1 py-0.5 mr-1.5 border border-stone-950 bg-[#fae155] font-mono uppercase">
+                            {pos.agentLabel}{pos.agentId != null ? ` #${pos.agentId}` : ''}
+                          </span>
+                        )}
                         {pos.marketName}
                         {pos.polymarketUrl && (
                           <a className="ml-1.5 inline-block align-middle text-blue-600" href={pos.polymarketUrl} target="_blank" rel="noreferrer" title="View on Polymarket">
