@@ -19,11 +19,18 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
   const { logs, board, state, connected } = useTelemetry();
   const [hiddenBefore, setHiddenBefore] = useState(0);
   const [injecting, setInjecting] = useState<string | null>(null);
+  const [selectedMandate, setSelectedMandate] = useState<string | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const t = THEME_PRESETS[styleId];
-  const visibleLogs = logs.slice(hiddenBefore);
-  const positions = state?.positions ?? [];
+  // clicking a running agent filters positions + telemetry to that mandate;
+  // system/market logs (no mandateId) stay as shared context
+  const allPositions = state?.positions ?? [];
+  const positions = selectedMandate ? allPositions.filter((p) => p.mandateId === selectedMandate) : allPositions;
+  const visibleLogs = logs
+    .slice(hiddenBefore)
+    .filter((l) => !selectedMandate || !l.mandateId || l.mandateId === selectedMandate);
+  const selectedLabel = state?.mandates?.find((m) => m.id === selectedMandate)?.agentLabel ?? selectedMandate;
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -84,39 +91,59 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
           <div className="flex items-center gap-1.5 border-b pb-2 mb-3 border-current/10">
             <Layers className="w-4 h-4 text-purple-600" />
             <h4 className="text-xs font-bold uppercase tracking-wider">Running Agents (concurrent mandates)</h4>
-            <span className="text-[10px] opacity-50 font-mono ml-auto">{state?.activeCount} active</span>
+            <span className="text-[10px] opacity-50 font-mono ml-auto">
+              {selectedMandate ? 'click again / All to clear filter' : 'click an agent to focus'} · {state?.activeCount} active
+            </span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
-            {state!.mandates.map((m) => (
-              <div
-                key={m.id}
-                className={`border-2 border-stone-950 rounded-none p-2.5 ${m.active ? 'bg-white' : 'bg-stone-100 opacity-60'}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="font-bold text-[11px] truncate flex items-center gap-1.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${m.active ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'}`}></span>
-                      {m.agentLabel ?? m.modelId}
-                      {m.agentId != null && <span className="text-[8px] px-1 border border-stone-950 bg-[#fae155] font-mono">NFA #{m.agentId}</span>}
+            {/* "All" chip to clear the filter */}
+            <button
+              type="button"
+              onClick={() => setSelectedMandate(null)}
+              className={`border-2 border-stone-950 rounded-none p-2.5 text-left cursor-pointer ${selectedMandate === null ? 'bg-[#fae155] shadow-[2px_2px_0px_#000]' : 'bg-white hover:bg-stone-50'}`}
+            >
+              <div className="font-bold text-[11px] flex items-center gap-1.5">📊 All agents</div>
+              <div className="text-[9px] opacity-60 font-mono mt-1">{allPositions.length} positions · combined view</div>
+            </button>
+            {state!.mandates.map((m) => {
+              const sel = selectedMandate === m.id;
+              return (
+                <div
+                  key={m.id}
+                  onClick={() => setSelectedMandate(sel ? null : m.id)}
+                  className={`border-2 border-stone-950 rounded-none p-2.5 cursor-pointer transition-all ${
+                    sel ? 'bg-[#fae155] shadow-[2px_2px_0px_#000] translate-y-[-1px]' : m.active ? 'bg-white hover:bg-stone-50' : 'bg-stone-100 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-bold text-[11px] truncate flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${m.active ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'}`}></span>
+                        {m.agentLabel ?? m.modelId}
+                        {m.agentId != null && <span className="text-[8px] px-1 border border-stone-950 bg-[#a7f3d0] font-mono">NFA #{m.agentId}</span>}
+                      </div>
+                      <div className="text-[9px] opacity-60 font-mono mt-1">
+                        {m.mode} · {m.openPositions}/{m.positions} open · budget ${m.budgetLeftUsdc.toFixed(2)}
+                        {m.copyTrade && ' · A2A copy'}
+                      </div>
                     </div>
-                    <div className="text-[9px] opacity-60 font-mono mt-1">
-                      {m.mode} · {m.openPositions}/{m.positions} open · budget ${m.budgetLeftUsdc.toFixed(2)}
-                      {m.copyTrade && ' · A2A copy'}
-                    </div>
+                    {m.active && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void api.stopMandate(m.id);
+                        }}
+                        title="Stop this agent"
+                        className="shrink-0 p-1 border-2 border-stone-950 rounded-none bg-rose-200 hover:bg-rose-300 cursor-pointer"
+                      >
+                        <Power className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
-                  {m.active && (
-                    <button
-                      type="button"
-                      onClick={() => void api.stopMandate(m.id)}
-                      title="Stop this agent"
-                      className="shrink-0 p-1 border-2 border-stone-950 rounded-none bg-rose-200 hover:bg-rose-300 cursor-pointer"
-                    >
-                      <Power className="w-3 h-3" />
-                    </button>
-                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -219,8 +246,14 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
 
           {/* Positions */}
           <div className="mt-4 border-t border-current/10 pt-3.5">
-            <span className="text-[11px] uppercase tracking-wider opacity-60 block mb-2 font-bold">
+            <span className="text-[11px] uppercase tracking-wider opacity-60 mb-2 font-bold flex items-center gap-2">
               💼 Onchain Positions (mirror market · Sepolia)
+              {selectedMandate && (
+                <span className="normal-case text-[9px] font-mono px-1.5 py-0.5 border-2 border-stone-950 bg-[#fae155] flex items-center gap-1">
+                  filtered: {selectedLabel}
+                  <button type="button" onClick={() => setSelectedMandate(null)} className="font-black cursor-pointer" title="Show all agents">✕</button>
+                </span>
+              )}
             </span>
             <div className="space-y-1.5 max-h-[180px] overflow-y-auto">
               {positions.length === 0 ? (
@@ -281,8 +314,13 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
             <div className="flex items-center gap-1.5 border-b pb-3 mb-3 border-current/10">
               <Terminal className="w-4 h-4 text-blue-500" />
               <h4 className={`text-xs font-bold uppercase tracking-wider ${t.titleText}`}>
-                Live Telemetry — Venice · 7715 · 1Shot · Sepolia
+                Live Telemetry{selectedMandate ? ` — ${selectedLabel}` : ' — Venice · 7715 · 1Shot · Sepolia'}
               </h4>
+              {selectedMandate && (
+                <button type="button" onClick={() => setSelectedMandate(null)} className="ml-auto text-[9px] font-mono px-1.5 py-0.5 border-2 border-stone-950 bg-[#fae155] cursor-pointer" title="Show all agents">
+                  ✕ clear
+                </button>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto pr-1 space-y-2 text-[11px] font-mono max-h-[460px] min-h-[320px]">

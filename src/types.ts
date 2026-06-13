@@ -51,6 +51,7 @@ export interface TelemetryLog {
   source: 'venice' | 'guardrail' | 'relayer' | 'contract' | 'system';
   message: string;
   type: 'info' | 'success' | 'warning' | 'error';
+  mandateId?: string; // per-mandate events; lets the console filter by agent
 }
 
 export interface ActivePosition {

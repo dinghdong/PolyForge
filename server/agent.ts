@@ -81,7 +81,7 @@ async function evaluateForMandate(ctx: ChainContext, mandate: Mandate, signal: M
     const matchUsed = mandateMatchSpent(mandate, matchKey);
     const matchLeft = mandate.maxSpendPerMatch - matchUsed;
     if (matchLeft <= 0) {
-      pushLog('guardrail', 'warning', `[${tag}] per-match cap reached on "${market.matchTitle ?? market.label}" ($${matchUsed.toFixed(2)}/$${mandate.maxSpendPerMatch}) — skip`);
+      pushLog('guardrail', 'warning', `[${tag}] per-match cap reached on "${market.matchTitle ?? market.label}" ($${matchUsed.toFixed(2)}/$${mandate.maxSpendPerMatch}) — skip`, mandate.id);
       return;
     }
 
@@ -93,19 +93,20 @@ async function evaluateForMandate(ctx: ChainContext, mandate: Mandate, signal: M
       decision.action === 'bet' ? 'success' : 'info',
       `[${tag}] "${market.question.slice(0, 48)}" → ${decision.action.toUpperCase()} ` +
         `${decision.action === 'bet' ? `${decision.outcome === 0 ? 'YES' : 'NO'} $${decision.amountUsdc} ` : ''}(conf ${decision.confidence.toFixed(2)})`,
+      mandate.id,
     );
     if (decision.action !== 'bet') return;
 
     // 2) guardrail precheck (mirror of the on-chain caveats)
     if (decision.amountUsdc > matchLeft || decision.amountUsdc > mandateBudgetLeft(mandate)) {
-      pushLog('guardrail', 'error', `[${tag}] BLOCKED: $${decision.amountUsdc} exceeds match-left $${matchLeft.toFixed(2)} or daily-left $${mandateBudgetLeft(mandate).toFixed(2)}`);
+      pushLog('guardrail', 'error', `[${tag}] BLOCKED: $${decision.amountUsdc} exceeds match-left $${matchLeft.toFixed(2)} or daily-left $${mandateBudgetLeft(mandate).toFixed(2)}`, mandate.id);
       return;
     }
     if (new Date(mandate.expiryDate).getTime() < Date.now()) {
-      pushLog('guardrail', 'error', `[${tag}] BLOCKED: mandate permission expired`);
+      pushLog('guardrail', 'error', `[${tag}] BLOCKED: mandate permission expired`, mandate.id);
       return;
     }
-    pushLog('guardrail', 'success', `[${tag}] ERC-7715 check OK — $${decision.amountUsdc} (match ${matchUsed.toFixed(2)}+${decision.amountUsdc}≤${mandate.maxSpendPerMatch}; daily-left ${mandateBudgetLeft(mandate).toFixed(2)})`);
+    pushLog('guardrail', 'success', `[${tag}] ERC-7715 check OK — $${decision.amountUsdc} (match ${matchUsed.toFixed(2)}+${decision.amountUsdc}≤${mandate.maxSpendPerMatch}; daily-left ${mandateBudgetLeft(mandate).toFixed(2)})`, mandate.id);
 
     // 3) execute (star rail; optionally mirrored by the 3-hop follower rail)
     lastBetAt.set(cdKey, Date.now());
@@ -162,12 +163,12 @@ async function executeBet(ctx: ChainContext, mandate: Mandate, signal: MarketSig
       ),
     );
     position.taskId = taskId;
-    pushLog('relayer', 'success', `[${mandate.agentLabel ?? mandate.id}] task ${taskId.slice(0, 16)}… submitted (fee ${formatUnits(feeAmount, 6)} USDC, gas: relayer-sponsored)`);
+    pushLog('relayer', 'success', `[${mandate.agentLabel ?? mandate.id}] task ${taskId.slice(0, 16)}… submitted (fee ${formatUnits(feeAmount, 6)} USDC, gas: relayer-sponsored)`, mandate.id);
     void pollUntilTerminal(ctx, taskId, position);
   } catch (e) {
     position.status = 'FAILED';
     upsertPosition(position);
-    pushLog('relayer', 'error', `[${mandate.agentLabel ?? mandate.id}] bundle rejected: ${(e as Error).message}`);
+    pushLog('relayer', 'error', `[${mandate.agentLabel ?? mandate.id}] bundle rejected: ${(e as Error).message}`, mandate.id);
   }
 }
 
@@ -183,7 +184,7 @@ async function pollUntilTerminal(ctx: ChainContext, taskId: string, position: Po
       if (st.status >= 400) {
         position.status = 'FAILED';
         upsertPosition(position);
-        pushLog('contract', 'error', `task ${taskId.slice(0, 16)}… failed (status ${st.status})`);
+        pushLog('contract', 'error', `[${position.agentLabel ?? position.mandateId}] task ${taskId.slice(0, 16)}… failed (status ${st.status})`, position.mandateId);
         return;
       }
     } catch {
@@ -197,7 +198,7 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
   position.status = 'OPEN';
   position.txHash = txHash;
   upsertPosition(position);
-  pushLog('contract', 'success', `[${position.agentLabel ?? position.mandateId}] bet confirmed${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user gas: 0)`);
+  pushLog('contract', 'success', `[${position.agentLabel ?? position.mandateId}] bet confirmed${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user gas: 0)`, position.mandateId);
   try {
     const recordTx = await recordBetDirect(ctx, {
       marketId: position.marketId,
@@ -208,9 +209,9 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
     });
     position.recordTxHash = recordTx;
     upsertPosition(position);
-    pushLog('contract', 'success', `[${position.agentLabel ?? position.mandateId}] recorded on mirror #${position.marketId} — https://sepolia.etherscan.io/tx/${recordTx}`);
+    pushLog('contract', 'success', `[${position.agentLabel ?? position.mandateId}] recorded on mirror #${position.marketId} — https://sepolia.etherscan.io/tx/${recordTx}`, position.mandateId);
   } catch (e) {
-    pushLog('contract', 'error', `recordBet failed: ${(e as Error).message}`);
+    pushLog('contract', 'error', `recordBet failed: ${(e as Error).message}`, position.mandateId);
   }
 }
 

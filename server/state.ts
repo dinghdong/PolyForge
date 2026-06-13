@@ -17,6 +17,7 @@ export type TelemetryLog = {
   source: TelemetrySource;
   message: string;
   type: TelemetryType;
+  mandateId?: string; // set for per-mandate events so the console can filter
 };
 
 export type Position = {
@@ -90,13 +91,14 @@ function broadcast(event: string, data: unknown) {
   for (const res of sseClients) res.write(frame);
 }
 
-export function pushLog(source: TelemetrySource, type: TelemetryType, message: string): TelemetryLog {
+export function pushLog(source: TelemetrySource, type: TelemetryType, message: string, mandateId?: string): TelemetryLog {
   const log: TelemetryLog = {
     id: `log-${++seq}`,
     timestamp: new Date().toISOString(),
     source,
     message,
     type,
+    ...(mandateId ? { mandateId } : {}),
   };
   logs.push(log);
   if (logs.length > 500) logs.shift();
