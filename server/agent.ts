@@ -122,6 +122,7 @@ async function executeBet(ctx: ChainContext, signal: MarketSignal, rail: 'star' 
     id: `pos-${++positionSeq}`,
     marketId: -1, // assigned after the mirror market exists
     outcomeIndex: outcome,
+    agentId: getAgentConfig()?.agentId,
     bettor,
     marketName: market.question,
     polymarketUrl: market.polymarketUrl,

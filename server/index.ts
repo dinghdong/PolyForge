@@ -20,8 +20,10 @@ import { initChainContext, getHeadlessRoot, setBrowserRoot, getBrowserDelegator,
 import { onMarketSignal, setWebhookUrl, applyConfirmation, findPositionByMemo } from './agent';
 import { verifyWebhook, type WebhookBody } from './relayer';
 import { startPolymarketFeed, getBoard, injectDislocation, marketSignals, type MarketSignal, type BoardSnapshot } from './polymarket';
+import { readAgents, mintAgent, getAgent, rememberPrompt } from './agents';
 import {
   getAgentConfig,
+  getPositions,
   pushBoard,
   pushLog,
   setAgentActive,
@@ -96,17 +98,80 @@ app.post('/api/markets/inject', (req, res) => {
   res.json({ ok: true, market: q });
 });
 
-app.post('/api/agents', (req, res) => {
+// --- Agent (brain / NFA) registry ---
+
+app.get('/api/agents/registry', async (_req, res) => {
+  try {
+    const agents = await readAgents();
+    const positions = getPositions();
+    // merge real activity per agent (no win-rate — markets settle outside the hackathon window)
+    const board = agents.map((a) => {
+      const own = positions.filter((p) => p.agentId === a.tokenId);
+      return {
+        ...a,
+        activity: {
+          positions: own.length,
+          volumeUsdc: own.reduce((s, p) => s + p.betAmountUsdc, 0),
+          openPositions: own.filter((p) => p.status === 'OPEN' || p.status === 'PENDING').length,
+          lastMarket: own[own.length - 1]?.marketName,
+        },
+      };
+    });
+    res.json(board);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+app.post('/api/agents/mint', async (req, res) => {
+  try {
+    const b = req.body ?? {};
+    const creator = (b.creator as `0x${string}`) ?? getBrowserDelegator() ?? ctx.userSmartAccount.address;
+    const label = String(b.label ?? 'Untitled Agent').slice(0, 64);
+    const model = String(b.model ?? 'venice-llama3-70b');
+    const prompt = String(b.prompt ?? '');
+    pushLog('system', 'info', `minting AgentNFA "${label}" → ${creator.slice(0, 10)}… (operator-funded)`);
+    const { tokenId, txHash } = await mintAgent(ctx, creator, label, model, prompt);
+    pushLog('contract', 'success', `AgentNFA #${tokenId} "${label}" minted — https://sepolia.etherscan.io/tx/${txHash}`);
+    res.json({ ok: true, tokenId, txHash });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// --- Mandate (running instance) ---
+
+app.post('/api/agents', async (req, res) => {
   const b = req.body ?? {};
+  // if a mandate references an NFA brain, resolve model/prompt from the registry
+  let agentId: number | undefined;
+  let agentLabel: string | undefined;
+  let modelId = String(b.modelId ?? 'venice-llama3-70b');
+  let prompt = String(b.prompt ?? '');
+  if (b.agentId !== undefined && b.agentId !== null) {
+    const brain = await getAgent(Number(b.agentId));
+    if (!brain) {
+      res.status(404).json({ ok: false, error: `agent #${b.agentId} not found` });
+      return;
+    }
+    agentId = brain.tokenId;
+    agentLabel = brain.label;
+    modelId = brain.model;
+    // prompt from registry unless the client re-supplied one (and remember it)
+    prompt = prompt || brain.prompt;
+    rememberPrompt(brain.tokenId, prompt);
+  }
   setAgentConfig({
-    modelId: String(b.modelId ?? 'venice-llama3-70b'),
-    prompt: String(b.prompt ?? ''),
+    agentId,
+    agentLabel,
+    modelId,
+    prompt,
     maxSpendPerMatch: Number(b.maxSpendPerMatch ?? 5),
     maxDailyAllowance: Number(b.maxDailyAllowance ?? 20),
     expiryDate: String(b.expiryDate ?? '2026-07-19'),
     copyTrade: Boolean(b.copyTrade ?? false),
   });
-  pushLog('system', 'success', `agent config saved — model=${b.modelId} perMarket=$${b.maxSpendPerMatch} daily=$${b.maxDailyAllowance}`);
+  pushLog('system', 'success', `mandate saved — ${agentLabel ? `agent "${agentLabel}" (NFA #${agentId})` : `model=${modelId}`} · perMatch=$${b.maxSpendPerMatch} daily=$${b.maxDailyAllowance}`);
   res.json({ ok: true });
 });
 

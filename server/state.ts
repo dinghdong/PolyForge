@@ -21,6 +21,7 @@ export type Position = {
   betId?: number;
   marketId: number;
   outcomeIndex: 0 | 1;
+  agentId?: number; // which AgentNFA brain opened this position
   bettor?: string;
   marketName: string;
   polymarketUrl?: string;
@@ -35,7 +36,15 @@ export type Position = {
   rail: 'star' | 'follower';
 };
 
+/**
+ * A Mandate = a running instance that binds a user's guardrails + execution to
+ * an Agent (brain, an AgentNFA). The brain fields (agentId/label/modelId/prompt)
+ * are resolved from the registry at activation and copied in, so the agent loop
+ * stays brain-agnostic. Runtime is single-mandate (multi-mandate = roadmap).
+ */
 export type AgentRuntimeConfig = {
+  agentId?: number; // AgentNFA tokenId this mandate runs (undefined = ad-hoc brain)
+  agentLabel?: string;
   modelId: string;
   prompt: string;
   maxSpendPerMatch: number;
