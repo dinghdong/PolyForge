@@ -54,16 +54,20 @@ const batchExec = [mkTransfer(caps.feeCollector, feeAmount), mkTransfer(accounts
 
 const TRANSFER_SEL = toFunctionSelector('transfer(address,uint256)');
 
+type ExecStrategy = 'single' | 'batch' | 'multiSingle';
+
 async function testChain(
   label: string,
   rootScope: NonNullable<Parameters<typeof createDelegation>[0]['scope']>,
-  batch = false,
+  execMode: ExecStrategy = 'single',
   leafFnCall = false,
 ) {
+  const batch = execMode === 'batch';
   const root = createDelegation({ to: accounts.agentA.address, from: userSA.address, environment: env, salt: freshSalt(), scope: rootScope });
   const rootSigned: Delegation = { ...root, signature: await userSA.signDelegation({ delegation: root }) };
 
-  const leafMax = batch ? feeAmount + workAmount : workAmount;
+  // leaf cap must cover everything this chain will transfer
+  const leafMax = execMode === 'single' ? workAmount : feeAmount + workAmount;
   const leaf = leafFnCall
     ? createDelegation({ to: caps.targetAddress, from: accounts.agentA.address, environment: env, salt: freshSalt(), parentDelegation: rootSigned, scope: { type: ScopeType.FunctionCall, targets: [usdc], selectors: [TRANSFER_SEL] } })
     : createDelegation({ to: caps.targetAddress, from: accounts.agentA.address, environment: env, salt: freshSalt(), parentDelegation: rootSigned, scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: leafMax } });
@@ -76,10 +80,25 @@ async function testChain(
   });
   const leafSigned: Delegation = { ...leaf, signature: leafSig };
 
-  const execs = batch ? batchExec : singleExec;
-  const permissionContexts = [encodeDelegations([leafSigned, rootSigned])]; // leaf-first
-  const modes = [batch ? ExecutionMode.BatchDefault : ExecutionMode.SingleDefault];
-  const executionCallDatas = encodeExecutionCalldatas([execs]);
+  const chainEncoded = encodeDelegations([leafSigned, rootSigned]); // leaf-first
+  let permissionContexts: `0x${string}`[];
+  let modes: ExecutionMode[];
+  let executionCallDatas: `0x${string}`[];
+  if (execMode === 'batch') {
+    // one redemption, both transfers as a BatchDefault execution
+    permissionContexts = [chainEncoded];
+    modes = [ExecutionMode.BatchDefault];
+    executionCallDatas = encodeExecutionCalldatas([batchExec]);
+  } else if (execMode === 'multiSingle') {
+    // redeem the SAME chain twice, each a SingleDefault execution (relayer's likely path)
+    permissionContexts = [chainEncoded, chainEncoded];
+    modes = [ExecutionMode.SingleDefault, ExecutionMode.SingleDefault];
+    executionCallDatas = encodeExecutionCalldatas([[batchExec[0]], [batchExec[1]]]);
+  } else {
+    permissionContexts = [chainEncoded];
+    modes = [ExecutionMode.SingleDefault];
+    executionCallDatas = encodeExecutionCalldatas([singleExec]);
+  }
 
   const data = encodeFunctionData({ abi: DM_ABI, functionName: 'redeemDelegations', args: [permissionContexts, modes, executionCallDatas] });
 
@@ -95,11 +114,9 @@ async function testChain(
 
 console.log(`user SA ${userSA.address} | agentA ${accounts.agentA.address} | target ${caps.targetAddress}`);
 
-await testChain('CONTROL — Erc20TransferAmount root', {
-  type: ScopeType.Erc20TransferAmount,
-  tokenAddress: usdc,
-  maxAmount: parseUnits('1', 6),
-});
+const transferRoot = { type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: parseUnits('5', 6) } as const;
+
+await testChain('CONTROL — TransferAmount root, single', transferRoot, 'single');
 
 const periodicScope = {
   type: ScopeType.Erc20PeriodTransfer,
@@ -109,6 +126,8 @@ const periodicScope = {
   startDate: Math.floor(Date.now() / 1000) - 60,
 } as const;
 
-await testChain('TEST — Periodic root, BATCH, Erc20TransferAmount leaf (current code)', periodicScope, true, false);
-await testChain('FIX  — Periodic root, BATCH, FunctionCall leaf', periodicScope, true, true);
-await testChain('FIX  — Erc20TransferAmount root, BATCH, FunctionCall leaf', { type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: parseUnits('5', 6) }, true, true);
+// resolve the contradiction with CORRECT leaf cap (= total transferred)
+await testChain('TransferAmount root, MULTI-SINGLE, TransferAmount leaf  [= headless]', transferRoot, 'multiSingle');
+await testChain('Periodic root, MULTI-SINGLE, TransferAmount leaf      [≈ browser]', periodicScope, 'multiSingle');
+await testChain('Periodic root, MULTI-SINGLE, FunctionCall leaf        [candidate FIX]', periodicScope, 'multiSingle', true);
+await testChain('TransferAmount root, BATCH, TransferAmount leaf       [if relayer batches]', transferRoot, 'batch');

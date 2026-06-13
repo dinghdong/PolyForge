@@ -11,6 +11,7 @@
  *     own root delegation (agentA was 7702-upgraded at deploy time).
  */
 import { randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { config as loadEnv } from 'dotenv';
 import {
   Implementation,
@@ -195,6 +196,15 @@ export async function resolveDirect(ctx: ChainContext, marketId: number, winner:
 let browserRoot: Delegation[] | undefined;
 export function setBrowserRoot(decoded: Delegation[]) {
   browserRoot = decoded;
+  // persist for offline redemption diagnosis (spike/04-replay-grant.ts)
+  try {
+    writeFileSync(
+      'spike/last-grant.json',
+      JSON.stringify(decoded, (_k, v) => (typeof v === 'bigint' ? `0x${v.toString(16)}` : v), 2),
+    );
+  } catch {
+    /* non-fatal */
+  }
 }
 export function getBrowserRoot(): Delegation[] | undefined {
   return browserRoot;
@@ -254,46 +264,48 @@ export type BetIntent = {
 
 /**
  * Browser-mode bundle: root authority is the user's real ERC-7715 grant
- * (delegate = agentA, erc20-token-periodic → transfers only). agentA
- * redelegates via parentPermissionContext to the relayer target.
- *   tx[0] (user chain):  [fee→collector, bet→market]   — pure USDC transfers
- *   tx[1] (agentA chain): [recordBet(market)]          — agentA's own root
- * The relayer merges both entries into one redeemDelegations batch.
+ * (delegate = agentA, erc20-token-periodic). agentA redelegates via
+ * parentPermissionContext to the relayer target.
+ *
+ * Spike 04 proved (eth_call against the real grant): the chain redeems
+ * cleanly under SINGLE call type, but a BATCH execution (fee+bet in one
+ * entry) reverts with `CaveatEnforcer:invalid-call-type` — the framework's
+ * enforcers reject batched calls, and the relayer masks the reason as 0x0.
+ *
+ * Fix: ONE execution per transactions[] entry (fee, then bet). The relayer
+ * redeems each as a single execution (multi-single), sidestepping batch.
+ * Leaf scope is FunctionCall (allow USDC transfer) — no per-leaf amount cap,
+ * so the same leaf serves both transfers; the grant's periodic cap still
+ * bounds total spend.
  */
 export async function buildBrowserBetBundle(ctx: ChainContext, intent: BetIntent, feeAmount: bigint): Promise<SendParams> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
   const grant = getBrowserRoot();
   if (!grant || grant.length === 0) throw new Error('no ERC-7715 permission context — sign in the Forge first');
 
-  const cap = feeAmount + intent.amountUsdc;
   const leaf = createDelegation({
     to: ctx.caps.targetAddress,
     from: ctx.agentA.address,
     environment: ctx.environment,
     salt: freshSalt(),
     parentPermissionContext: grant,
-    scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: cap },
+    scope: { type: ScopeType.FunctionCall, targets: [ctx.usdc], selectors: [SELECTORS.transfer] },
   });
   const leafSigned = await signAsAgent(ctx, leaf, 'SPIKE_AGENT_A_PK');
+  const permissionContext = [toRelayerJson(leafSigned), ...grant.map((d) => toRelayerJson(d))];
 
+  const transfer = (to: string, amount: bigint) => ({
+    target: ctx.usdc,
+    value: '0',
+    data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to as `0x${string}`, amount] }),
+  });
+
+  // two single-execution entries → relayer redeems multi-single, never batch
   return {
     chainId: CHAIN_ID,
     transactions: [
-      {
-        permissionContext: [toRelayerJson(leafSigned), ...grant.map((d) => toRelayerJson(d))],
-        executions: [
-          {
-            target: ctx.usdc,
-            value: '0',
-            data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.caps.feeCollector, feeAmount] }),
-          },
-          {
-            target: ctx.usdc,
-            value: '0',
-            data: encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [ctx.market, intent.amountUsdc] }),
-          },
-        ],
-      },
+      { permissionContext, executions: [transfer(ctx.caps.feeCollector, feeAmount)] },
+      { permissionContext, executions: [transfer(ctx.market, intent.amountUsdc)] },
     ],
   };
 }
