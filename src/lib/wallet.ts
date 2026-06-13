@@ -6,7 +6,8 @@
  * narrower slice to the relayer via `parentPermissionContext` (server-side).
  * Requires MetaMask ≥ 13.23 (erc20-token-periodic in production builds).
  */
-import { createWalletClient, custom, parseUnits } from 'viem';
+import { createWalletClient, createPublicClient, custom, parseAbi, parseUnits, keccak256, toHex } from 'viem';
+import { sepolia } from 'viem/chains';
 import { erc7715ProviderActions } from '@metamask/smart-accounts-kit/actions';
 
 const SEPOLIA_ID = 11155111;
@@ -75,6 +76,45 @@ export async function ensureSepolia(): Promise<void> {
   const chainId = (await eth.request({ method: 'eth_chainId' })) as string;
   if (chainId?.toLowerCase() === SEPOLIA_HEX) return;
   await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: SEPOLIA_HEX }] });
+}
+
+const AGENT_NFA_MINT_ABI = parseAbi([
+  'function mint(address to, string label, string model, bytes32 configHash, bool copyable) returns (uint256)',
+  'function agentCount() view returns (uint256)',
+]);
+
+/** configHash must match the server's configHashFor(model, prompt). */
+export function configHashFor(model: string, prompt: string): `0x${string}` {
+  return keccak256(toHex(`${model}|${prompt}`));
+}
+
+/**
+ * User-signed mint: the connected wallet sends the AgentNFA.mint tx, pays gas,
+ * and owns the resulting NFA (to = the user). Returns the new tokenId.
+ */
+export async function mintAgentNFA(p: {
+  nfaAddress: `0x${string}`;
+  label: string;
+  model: string;
+  prompt: string;
+  copyable: boolean;
+}): Promise<{ txHash: `0x${string}`; tokenId: number }> {
+  const eth = getEthereum();
+  const account = await connectWallet();
+  await ensureSepolia();
+  const wallet = createWalletClient({ account, chain: sepolia, transport: custom(eth) });
+  const pub = createPublicClient({ chain: sepolia, transport: custom(eth) });
+
+  const txHash = await wallet.writeContract({
+    address: p.nfaAddress,
+    abi: AGENT_NFA_MINT_ABI,
+    functionName: 'mint',
+    args: [account, p.label, p.model, configHashFor(p.model, p.prompt), p.copyable],
+  });
+  await pub.waitForTransactionReceipt({ hash: txHash });
+  // tokenIds are sequential; the one we just minted is the latest count
+  const tokenId = Number(await pub.readContract({ address: p.nfaAddress, abi: AGENT_NFA_MINT_ABI, functionName: 'agentCount' }));
+  return { txHash, tokenId };
 }
 
 export type GrantParams = {

@@ -81,15 +81,30 @@ export default function App() {
     setMinting(true);
     setMintMsg('');
     try {
-      const r = await api.mintAgent({ label: agentName, model: config.modelId, prompt: config.prompt, creator: walletAddress ?? undefined, copyable: mintCopyable });
-      setMintMsg(`✓ Minted AgentNFA #${r.tokenId}`);
-      setConfig((p) => ({ ...p, agentId: r.tokenId, agentLabel: agentName }));
+      // the AgentNFA contract address comes from any agent's DID: did:nfa:chain:contract:tokenId
+      const nfaAddress = registry[0]?.did?.split(':')[3] as `0x${string}` | undefined;
+      if (nfaAddress) {
+        // user-signed: your MetaMask sends the mint, you pay gas, you own the NFA
+        setMintMsg('Confirm the mint in MetaMask…');
+        const { mintAgentNFA } = await import('./lib/wallet');
+        const r = await mintAgentNFA({ nfaAddress, label: agentName, model: config.modelId, prompt: config.prompt, copyable: mintCopyable });
+        setMintMsg(`✓ Minted AgentNFA #${r.tokenId} — you signed & own it`);
+        setConfig((p) => ({ ...p, agentId: r.tokenId, agentLabel: agentName }));
+        // hand the off-chain prompt to the server + select it as the active brain
+        await api.saveAgentConfig({ agentId: r.tokenId, modelId: config.modelId, prompt: config.prompt, maxSpendPerMatch: config.maxSpendPerMatch, maxDailyAllowance: config.maxDailyAllowance, expiryDate: config.expiryDate, copyTrade: false }).catch(() => {});
+      } else {
+        // fallback (no agents yet to derive the address): operator-funded mint
+        const r = await api.mintAgent({ label: agentName, model: config.modelId, prompt: config.prompt, creator: walletAddress ?? undefined, copyable: mintCopyable });
+        setMintMsg(`✓ Minted AgentNFA #${r.tokenId} (operator-funded)`);
+        setConfig((p) => ({ ...p, agentId: r.tokenId, agentLabel: agentName }));
+      }
       await api.getRegistry().then(setRegistry).catch(() => {});
     } catch (e) {
-      setMintMsg((e as Error).message);
+      const msg = (e as Error).message ?? 'mint failed';
+      setMintMsg(/denied|rejected/i.test(msg) ? 'mint cancelled in wallet' : msg);
     } finally {
       setMinting(false);
-      setTimeout(() => setMintMsg(''), 7000);
+      setTimeout(() => setMintMsg(''), 8000);
     }
   };
 
@@ -358,11 +373,11 @@ export default function App() {
                         type="button"
                         onClick={handleMint}
                         disabled={minting}
-                        title="Mint this brain as an AgentNFA (operator-funded). Optional — you can also launch without minting."
+                        title="Mint this brain as an AgentNFA — you sign in MetaMask and own it. Optional; you can also Confirm Launch without minting."
                         className="flex-1 py-2 px-4 text-[11px] font-bold uppercase font-mono cursor-pointer bg-blue-300 hover:bg-blue-400 border-2 border-stone-950 rounded-none shadow-[2px_2px_0px_#000] disabled:opacity-50 flex items-center justify-center gap-1.5"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        {minting ? 'Minting…' : 'Mint as NFA (optional)'}
+                        {minting ? 'Minting…' : '🦊 Mint as NFA (you sign)'}
                       </button>
                     </div>
                   </div>
