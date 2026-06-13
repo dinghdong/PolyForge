@@ -156,7 +156,10 @@ async function executeBet(ctx: ChainContext, signal: MarketSignal, rail: 'star' 
     position.taskId = taskId;
     pushLog('relayer', 'success', `task ${taskId.slice(0, 18)}… submitted (fee ${formatUnits(feeAmount, 6)} USDC, gas: relayer-sponsored)`);
 
-    if (!webhookUrl) void pollUntilTerminal(ctx, taskId, position);
+    // always poll as a backstop — webhooks can be silent (tunnel down, or a
+    // pre-broadcast revert that never emits an event); poll catches terminal
+    // status either way. applyConfirmation is idempotent vs the webhook.
+    void pollUntilTerminal(ctx, taskId, position);
     addSpent(amountUsdc);
   } catch (e) {
     position.status = 'FAILED';
