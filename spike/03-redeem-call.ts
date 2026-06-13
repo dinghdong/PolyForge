@@ -56,7 +56,7 @@ const TRANSFER_SEL = toFunctionSelector('transfer(address,uint256)');
 
 async function testChain(
   label: string,
-  rootScope: Parameters<typeof createDelegation>[0]['scope'],
+  rootScope: NonNullable<Parameters<typeof createDelegation>[0]['scope']>,
   batch = false,
   leafFnCall = false,
 ) {
@@ -64,17 +64,9 @@ async function testChain(
   const rootSigned: Delegation = { ...root, signature: await userSA.signDelegation({ delegation: root }) };
 
   const leafMax = batch ? feeAmount + workAmount : workAmount;
-  const leafScope = leafFnCall
-    ? { type: ScopeType.FunctionCall, targets: [usdc], selectors: [TRANSFER_SEL] }
-    : { type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: leafMax };
-  const leaf = createDelegation({
-    to: caps.targetAddress,
-    from: accounts.agentA.address,
-    environment: env,
-    salt: freshSalt(),
-    parentDelegation: rootSigned,
-    scope: leafScope,
-  });
+  const leaf = leafFnCall
+    ? createDelegation({ to: caps.targetAddress, from: accounts.agentA.address, environment: env, salt: freshSalt(), parentDelegation: rootSigned, scope: { type: ScopeType.FunctionCall, targets: [usdc], selectors: [TRANSFER_SEL] } })
+    : createDelegation({ to: caps.targetAddress, from: accounts.agentA.address, environment: env, salt: freshSalt(), parentDelegation: rootSigned, scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: usdc, maxAmount: leafMax } });
   const { signature: _drop, ...leafUnsigned } = leaf as Delegation & { signature?: unknown };
   const leafSig = await signDelegation({
     privateKey: process.env.SPIKE_AGENT_A_PK as `0x${string}`,
