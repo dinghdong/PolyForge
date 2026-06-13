@@ -110,89 +110,113 @@ async function signAsAgent(
 }
 
 /**
- * Headless root: user SA delegates a USDC budget to agentA — transfers only,
- * capped. Mirrors the semantics of a browser ERC-7715 erc20-periodic grant
- * (the user's authority never extends beyond moving budgeted USDC).
- * Cached per server run (one signature), like a session the user granted once.
+ * Per-mandate headless root: each running mandate gets its OWN user→agentA
+ * delegation (distinct salt + on-chain cap) so concurrent mandates don't
+ * contend on one shared allowance. Cached by mandateId (one signature each).
  */
-let headlessRoot: Delegation | undefined;
-export async function getHeadlessRoot(ctx: ChainContext): Promise<Delegation> {
-  if (headlessRoot) return headlessRoot;
+const headlessRoots = new Map<string, Delegation>();
+export async function getHeadlessRoot(ctx: ChainContext, mandateId = 'default'): Promise<Delegation> {
+  const cached = headlessRoots.get(mandateId);
+  if (cached) return cached;
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set — deploy the market first');
   const root = createDelegation({
     to: ctx.agentA.address,
     from: ctx.userSmartAccount.address,
     environment: ctx.environment,
     salt: freshSalt(),
-    // budget ceiling, not target spend. The on-chain enforcer decrements this
-    // CUMULATIVELY across redemptions (observed live: bet #2 rejected with
-    // allowance-exceeded once fee+bet sums crossed the cap) and Sepolia
-    // relayer fees swing 6-22 USDC with testnet gas — so one demo session of
-    // 3-4 bets needs ~60.
+    // budget ceiling per mandate, not target spend. The on-chain enforcer
+    // decrements CUMULATIVELY across this mandate's redemptions; Sepolia
+    // relayer fees swing 6-22 USDC, so allow ample headroom for a few bets.
     scope: { type: ScopeType.Erc20TransferAmount, tokenAddress: ctx.usdc, maxAmount: parseUnits('60', 6) },
   });
-  headlessRoot = { ...root, signature: await ctx.userSmartAccount.signDelegation({ delegation: root }) };
-  return headlessRoot;
+  const signed = { ...root, signature: await ctx.userSmartAccount.signDelegation({ delegation: root }) };
+  headlessRoots.set(mandateId, signed);
+  return signed;
 }
 
 /**
- * Operator calls (recordBet / resolve) are backend ops paid by agentA's own
- * ETH as plain transactions — routing them through the relayer tripled the
- * bundle gas (700k vs 490k) and the testnet fee (22 vs ~6 USDC). The USER
- * money rail stays 100% relayer-redeemed and gasless.
+ * Operator calls (recordBet / resolve / createMarket) are backend ops paid by
+ * agentA's own ETH. Under concurrency multiple mandates would race agentA's
+ * nonce — so all operator writes are serialized through one async queue.
  */
 const operatorWallet = (ctx: ChainContext) =>
   createWalletClient({ chain: CHAIN, transport: http(SEPOLIA_RPC), account: ctx.agentA });
 
+let opQueue: Promise<unknown> = Promise.resolve();
+function enqueueOp<T>(fn: () => Promise<T>): Promise<T> {
+  const run = opQueue.then(fn, fn); // run after the previous op settles (ok or not)
+  opQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
 export async function recordBetDirect(ctx: ChainContext, intent: BetIntent): Promise<`0x${string}`> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
-  const hash = await operatorWallet(ctx).writeContract({
-    chain: CHAIN,
-    account: ctx.agentA,
-    address: ctx.market,
-    abi: MARKET_ABI,
-    functionName: 'recordBet',
-    args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc, intent.entryPriceE6],
+  return enqueueOp(async () => {
+    const hash = await operatorWallet(ctx).writeContract({
+      chain: CHAIN,
+      account: ctx.agentA,
+      address: ctx.market!,
+      abi: MARKET_ABI,
+      functionName: 'recordBet',
+      args: [intent.bettor, BigInt(intent.marketId), intent.outcome, intent.amountUsdc, intent.entryPriceE6],
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return hash;
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-  return hash;
 }
 
 /** slug → on-chain mirror market id (created lazily on first bet). */
 const mirrorIds = new Map<string, number>();
+const mirrorInFlight = new Map<string, Promise<number>>();
 
 export async function ensureMirrorMarket(ctx: ChainContext, slug: string, question: string): Promise<number> {
   const cached = mirrorIds.get(slug);
   if (cached !== undefined) return cached;
+  // dedupe concurrent first-bets on the same market into one createMarket
+  const pending = mirrorInFlight.get(slug);
+  if (pending) return pending;
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
-  const nextId = Number(
-    await publicClient.readContract({ address: ctx.market, abi: MARKET_ABI, functionName: 'marketCount' }),
-  );
-  const hash = await operatorWallet(ctx).writeContract({
-    chain: CHAIN,
-    account: ctx.agentA,
-    address: ctx.market,
-    abi: MARKET_ABI,
-    functionName: 'createMarket',
-    args: [`${question} (mirrors Polymarket)`, 'Yes', 'No', BigInt(Math.floor(Date.now() / 1000) + 60 * 24 * 3600)],
+  const p = enqueueOp(async () => {
+    const existing = mirrorIds.get(slug);
+    if (existing !== undefined) return existing;
+    const nextId = Number(await publicClient.readContract({ address: ctx.market!, abi: MARKET_ABI, functionName: 'marketCount' }));
+    const hash = await operatorWallet(ctx).writeContract({
+      chain: CHAIN,
+      account: ctx.agentA,
+      address: ctx.market!,
+      abi: MARKET_ABI,
+      functionName: 'createMarket',
+      args: [`${question} (mirrors Polymarket)`, 'Yes', 'No', BigInt(Math.floor(Date.now() / 1000) + 60 * 24 * 3600)],
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    mirrorIds.set(slug, nextId);
+    return nextId;
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-  mirrorIds.set(slug, nextId);
-  return nextId;
+  mirrorInFlight.set(slug, p);
+  try {
+    return await p;
+  } finally {
+    mirrorInFlight.delete(slug);
+  }
 }
 
 export async function resolveDirect(ctx: ChainContext, marketId: number, winner: 0 | 1): Promise<`0x${string}`> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
-  const hash = await operatorWallet(ctx).writeContract({
-    chain: CHAIN,
-    account: ctx.agentA,
-    address: ctx.market,
-    abi: MARKET_ABI,
-    functionName: 'resolve',
-    args: [BigInt(marketId), winner],
+  return enqueueOp(async () => {
+    const hash = await operatorWallet(ctx).writeContract({
+      chain: CHAIN,
+      account: ctx.agentA,
+      address: ctx.market!,
+      abi: MARKET_ABI,
+      functionName: 'resolve',
+      args: [BigInt(marketId), winner],
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return hash;
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-  return hash;
 }
 
 /** Browser root: the decoded ERC-7715 permission context granted to agentA. */
@@ -262,6 +286,7 @@ export type BetIntent = {
   amountUsdc: bigint; // 6 decimals
   entryPriceE6: bigint; // share price at entry, micro-USDC (live Polymarket quote)
   bettor: `0x${string}`;
+  mandateId?: string; // which mandate's root delegation to redeem
   viaFollower?: boolean; // 3-hop copy-trade rail
 };
 
@@ -325,7 +350,7 @@ export async function buildBrowserBetBundle(ctx: ChainContext, intent: BetIntent
  */
 export async function buildBetBundle(ctx: ChainContext, intent: BetIntent, feeAmount: bigint): Promise<SendParams> {
   if (!ctx.market) throw new Error('MARKET_ADDRESS not set');
-  const root = await getHeadlessRoot(ctx);
+  const root = await getHeadlessRoot(ctx, intent.mandateId);
   const cap = feeAmount + intent.amountUsdc;
 
   let permissionContext: unknown[];

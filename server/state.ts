@@ -1,6 +1,9 @@
 /**
  * In-memory state + SSE fan-out (D1: no database for the hackathon build).
- * Telemetry shape mirrors the frontend's TelemetryLog type.
+ *
+ * Multi-mandate runtime: many Mandates run concurrently. A Mandate binds a
+ * user's guardrails + execution to an Agent (brain, an AgentNFA). Each has its
+ * own budget accounting; market signals fan out to every active mandate.
  */
 import type { Response } from 'express';
 import type { BoardSnapshot } from './polymarket';
@@ -21,7 +24,9 @@ export type Position = {
   betId?: number;
   marketId: number;
   outcomeIndex: 0 | 1;
-  agentId?: number; // which AgentNFA brain opened this position
+  mandateId?: string; // which running mandate opened this position
+  agentId?: number; // which AgentNFA brain
+  agentLabel?: string;
   bettor?: string;
   marketName: string;
   polymarketUrl?: string;
@@ -36,13 +41,7 @@ export type Position = {
   rail: 'star' | 'follower';
 };
 
-/**
- * A Mandate = a running instance that binds a user's guardrails + execution to
- * an Agent (brain, an AgentNFA). The brain fields (agentId/label/modelId/prompt)
- * are resolved from the registry at activation and copied in, so the agent loop
- * stays brain-agnostic. Runtime is single-mandate (multi-mandate = roadmap).
- */
-export type AgentRuntimeConfig = {
+export type MandateConfig = {
   agentId?: number; // AgentNFA tokenId this mandate runs (undefined = ad-hoc brain)
   agentLabel?: string;
   modelId: string;
@@ -53,12 +52,19 @@ export type AgentRuntimeConfig = {
   copyTrade: boolean; // also mirror via 3-hop follower rail
 };
 
+export type Mandate = MandateConfig & {
+  id: string;
+  mode: 'headless' | 'browser';
+  active: boolean;
+  spentToday: number;
+  spentPerMatch: Map<string, number>;
+  createdAt: number;
+};
+
 const logs: TelemetryLog[] = [];
 const positions: Position[] = [];
-let agentConfig: AgentRuntimeConfig | undefined;
-let agentActive = false;
-let spentTodayUsdc = 0;
-const spentPerMatch = new Map<string, number>();
+const mandates = new Map<string, Mandate>();
+let mandateSeq = 0;
 let lastBoard: BoardSnapshot = { matches: [], futures: [] };
 
 const sseClients = new Set<Response>();
@@ -66,7 +72,6 @@ let seq = 0;
 
 export function sseSubscribe(res: Response) {
   sseClients.add(res);
-  // replay recent history so a fresh console isn't empty
   for (const log of logs.slice(-40)) {
     res.write(`event: log\ndata: ${JSON.stringify(log)}\n\n`);
   }
@@ -106,13 +111,62 @@ export function pushBoard(board: BoardSnapshot) {
   broadcast('markets', board);
 }
 
-/** Max-Spend-Per-Match guardrail accounting (key = match event slug). */
-export function matchSpent(key: string): number {
-  return spentPerMatch.get(key) ?? 0;
+// ---------- Mandates ----------
+
+export function createMandate(cfg: MandateConfig, mode: 'headless' | 'browser'): Mandate {
+  const m: Mandate = {
+    ...cfg,
+    id: `m-${++mandateSeq}`,
+    mode,
+    active: true,
+    spentToday: 0,
+    spentPerMatch: new Map(),
+    createdAt: Date.now(),
+  };
+  mandates.set(m.id, m);
+  broadcast('state', snapshot());
+  return m;
 }
-export function addMatchSpent(key: string, usdc: number) {
-  spentPerMatch.set(key, (spentPerMatch.get(key) ?? 0) + usdc);
+
+export function getMandate(id: string): Mandate | undefined {
+  return mandates.get(id);
 }
+
+export function getActiveMandates(): Mandate[] {
+  return [...mandates.values()].filter((m) => m.active);
+}
+
+export function getAllMandates(): Mandate[] {
+  return [...mandates.values()];
+}
+
+export function stopMandate(id: string): boolean {
+  const m = mandates.get(id);
+  if (!m) return false;
+  m.active = false;
+  broadcast('state', snapshot());
+  return true;
+}
+
+export function stopAllMandates() {
+  for (const m of mandates.values()) m.active = false;
+  broadcast('state', snapshot());
+}
+
+// per-mandate budget accounting
+export function mandateBudgetLeft(m: Mandate): number {
+  return Math.max(0, m.maxDailyAllowance - m.spentToday);
+}
+export function mandateMatchSpent(m: Mandate, key: string): number {
+  return m.spentPerMatch.get(key) ?? 0;
+}
+export function addMandateSpent(m: Mandate, key: string, usdc: number) {
+  m.spentToday += usdc;
+  m.spentPerMatch.set(key, (m.spentPerMatch.get(key) ?? 0) + usdc);
+  broadcast('state', snapshot());
+}
+
+// ---------- Positions ----------
 
 export function upsertPosition(p: Position) {
   const i = positions.findIndex((x) => x.id === p.id);
@@ -125,32 +179,37 @@ export function getPositions() {
   return positions;
 }
 
-export function setAgentConfig(cfg: AgentRuntimeConfig) {
-  agentConfig = cfg;
-}
-export function getAgentConfig() {
-  return agentConfig;
-}
-export function setAgentActive(active: boolean) {
-  agentActive = active;
-  broadcast('state', snapshot());
-}
-export function isAgentActive() {
-  return agentActive;
-}
-export function addSpent(usdc: number) {
-  spentTodayUsdc += usdc;
-}
-export function budgetLeft(): number {
-  return Math.max(0, (agentConfig?.maxDailyAllowance ?? 0) - spentTodayUsdc);
+// ---------- Snapshot (serializable; Maps omitted) ----------
+
+function mandateView(m: Mandate) {
+  const pos = positions.filter((p) => p.mandateId === m.id);
+  return {
+    id: m.id,
+    agentId: m.agentId,
+    agentLabel: m.agentLabel,
+    modelId: m.modelId,
+    mode: m.mode,
+    active: m.active,
+    maxSpendPerMatch: m.maxSpendPerMatch,
+    maxDailyAllowance: m.maxDailyAllowance,
+    expiryDate: m.expiryDate,
+    copyTrade: m.copyTrade,
+    spentToday: m.spentToday,
+    budgetLeftUsdc: mandateBudgetLeft(m),
+    createdAt: m.createdAt,
+    positions: pos.length,
+    openPositions: pos.filter((p) => p.status === 'OPEN' || p.status === 'PENDING').length,
+  };
 }
 
 export function snapshot() {
+  const active = getActiveMandates();
   return {
-    agentActive,
-    agentConfig,
-    spentTodayUsdc,
-    budgetLeftUsdc: budgetLeft(),
+    mandates: getAllMandates().map(mandateView),
+    activeCount: active.length,
+    agentActive: active.length > 0,
+    budgetLeftUsdc: active.reduce((s, m) => s + mandateBudgetLeft(m), 0),
+    spentTodayUsdc: getAllMandates().reduce((s, m) => s + m.spentToday, 0),
     positions,
   };
 }

@@ -1,7 +1,8 @@
 /**
- * The agent loop: market repricing signal → Venice decision → guardrail
- * precheck → delegation bundle → relayer (gasless) → webhook/poll →
- * on-chain mirror position.
+ * Multi-mandate agent loop: a market repricing signal fans out to EVERY active
+ * mandate. Each mandate decides independently (its own brain, budget, cooldown,
+ * in-flight lock), then executes its bet on the gasless rail. Mandates run
+ * concurrently; agentA operator writes are serialized in chain.ts.
  */
 import { formatUnits, parseUnits } from 'viem';
 import {
@@ -17,15 +18,14 @@ import { estimateAndSend, getStatus } from './relayer';
 import { decideBet } from './venice';
 import type { MarketSignal } from './polymarket';
 import {
-  addMatchSpent,
-  addSpent,
-  budgetLeft,
-  getAgentConfig,
+  addMandateSpent,
+  getActiveMandates,
   getPositions,
-  isAgentActive,
-  matchSpent,
+  mandateBudgetLeft,
+  mandateMatchSpent,
   pushLog,
   upsertPosition,
+  type Mandate,
   type Position,
 } from './state';
 
@@ -34,95 +34,108 @@ export function setWebhookUrl(url: string | undefined) {
   webhookUrl = url;
 }
 
-let inFlight = false;
 let positionSeq = 0;
-/** per-market cooldown so a jittery quote doesn't trigger rapid-fire bets */
+/** per-(mandate,market) cooldown + per-mandate in-flight lock */
 const lastBetAt = new Map<string, number>();
+const inFlight = new Set<string>();
 const MARKET_COOLDOWN_MS = 90_000;
 
-export async function onMarketSignal(ctx: ChainContext, signal: MarketSignal) {
-  if (!isAgentActive()) return;
-  const { market } = signal;
-  if (inFlight) {
-    pushLog('system', 'warning', `signal on "${market.question.slice(0, 50)}…" skipped — previous bundle still in flight`);
-    return;
-  }
-  const last = lastBetAt.get(market.slug) ?? 0;
-  if (Date.now() - last < MARKET_COOLDOWN_MS) return;
-  const cfg = getAgentConfig();
-  if (!cfg) return;
+/**
+ * Concurrent mandates share one underlying user account (headless) or grant
+ * (browser). Two redemptions from the same EIP-7702 account at once conflict
+ * on its internal execution state — so serialize relayer sends per bettor.
+ * Decisions stay concurrent; only the on-chain execution queues.
+ */
+const sendQueues = new Map<string, Promise<unknown>>();
+function enqueueSend<T>(account: string, fn: () => Promise<T>): Promise<T> {
+  const prev = sendQueues.get(account) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  sendQueues.set(
+    account,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
+}
 
-  inFlight = true;
+export async function onMarketSignal(ctx: ChainContext, signal: MarketSignal) {
+  const active = getActiveMandates();
+  if (active.length === 0) return;
+  // fan out: every active mandate evaluates this signal independently
+  await Promise.all(active.map((m) => evaluateForMandate(ctx, m, signal)));
+}
+
+async function evaluateForMandate(ctx: ChainContext, mandate: Mandate, signal: MarketSignal) {
+  const { market } = signal;
+  if (inFlight.has(mandate.id)) return; // this mandate is already placing a bet
+  const cdKey = `${mandate.id}:${market.slug}`;
+  if (Date.now() - (lastBetAt.get(cdKey) ?? 0) < MARKET_COOLDOWN_MS) return;
+
+  inFlight.add(mandate.id);
   try {
+    const tag = `${mandate.agentLabel ? `"${mandate.agentLabel}"` : mandate.id}`;
     // Max Spend Per Match: cumulative across all outcomes of one match
     const matchKey = market.matchSlug ?? `futures:${market.slug}`;
-    const matchUsed = matchSpent(matchKey);
-    const matchLeftUsdc = cfg.maxSpendPerMatch - matchUsed;
-    if (matchLeftUsdc <= 0) {
-      pushLog(
-        'guardrail',
-        'warning',
-        `BLOCKED: per-match cap reached for "${market.matchTitle ?? market.label}" — already $${matchUsed.toFixed(2)} / cap $${cfg.maxSpendPerMatch} (no re-entry this match)`,
-      );
+    const matchUsed = mandateMatchSpent(mandate, matchKey);
+    const matchLeft = mandate.maxSpendPerMatch - matchUsed;
+    if (matchLeft <= 0) {
+      pushLog('guardrail', 'warning', `[${tag}] per-match cap reached on "${market.matchTitle ?? market.label}" ($${matchUsed.toFixed(2)}/$${mandate.maxSpendPerMatch}) — skip`);
       return;
     }
 
-    // 1) brain — analyse this market's repricing
-    const left = Math.min(budgetLeft(), matchLeftUsdc);
-    const decision = await decideBet(cfg, market, left);
+    // 1) brain
+    const left = Math.min(mandateBudgetLeft(mandate), matchLeft);
+    const decision = await decideBet({ modelId: mandate.modelId, prompt: mandate.prompt, maxSpendPerMatch: mandate.maxSpendPerMatch, maxDailyAllowance: mandate.maxDailyAllowance }, market, left);
     pushLog(
       'venice',
       decision.action === 'bet' ? 'success' : 'info',
-      `[${decision.engine}${decision.model ? `:${decision.model}` : ''}] "${market.question.slice(0, 60)}" → ${decision.action.toUpperCase()} ` +
-        `${decision.action === 'bet' ? `${decision.outcome === 0 ? 'YES' : 'NO'} $${decision.amountUsdc} ` : ''}(conf ${decision.confidence.toFixed(2)}) ${decision.rationale}`,
+      `[${tag}] "${market.question.slice(0, 48)}" → ${decision.action.toUpperCase()} ` +
+        `${decision.action === 'bet' ? `${decision.outcome === 0 ? 'YES' : 'NO'} $${decision.amountUsdc} ` : ''}(conf ${decision.confidence.toFixed(2)})`,
     );
     if (decision.action !== 'bet') return;
 
     // 2) guardrail precheck (mirror of the on-chain caveats)
-    if (decision.amountUsdc > matchLeftUsdc || decision.amountUsdc > budgetLeft()) {
-      pushLog(
-        'guardrail',
-        'error',
-        `BLOCKED: $${decision.amountUsdc} exceeds match budget left $${matchLeftUsdc.toFixed(2)} (cap $${cfg.maxSpendPerMatch}) or daily left $${budgetLeft().toFixed(2)}`,
-      );
+    if (decision.amountUsdc > matchLeft || decision.amountUsdc > mandateBudgetLeft(mandate)) {
+      pushLog('guardrail', 'error', `[${tag}] BLOCKED: $${decision.amountUsdc} exceeds match-left $${matchLeft.toFixed(2)} or daily-left $${mandateBudgetLeft(mandate).toFixed(2)}`);
       return;
     }
-    if (new Date(cfg.expiryDate).getTime() < Date.now()) {
-      pushLog('guardrail', 'error', 'BLOCKED: permission expired');
+    if (new Date(mandate.expiryDate).getTime() < Date.now()) {
+      pushLog('guardrail', 'error', `[${tag}] BLOCKED: mandate permission expired`);
       return;
     }
-    pushLog(
-      'guardrail',
-      'success',
-      `ERC-7715 limit check OK — $${decision.amountUsdc} (match: ${matchUsed.toFixed(2)}+${decision.amountUsdc} ≤ ${cfg.maxSpendPerMatch}; daily left ${budgetLeft().toFixed(2)}; expires ${cfg.expiryDate})`,
-    );
+    pushLog('guardrail', 'success', `[${tag}] ERC-7715 check OK — $${decision.amountUsdc} (match ${matchUsed.toFixed(2)}+${decision.amountUsdc}≤${mandate.maxSpendPerMatch}; daily-left ${mandateBudgetLeft(mandate).toFixed(2)})`);
 
     // 3) execute (star rail; optionally mirrored by the 3-hop follower rail)
-    lastBetAt.set(market.slug, Date.now());
-    const rails: ('star' | 'follower')[] = cfg.copyTrade ? ['star', 'follower'] : ['star'];
+    lastBetAt.set(cdKey, Date.now());
+    const rails: ('star' | 'follower')[] = mandate.copyTrade ? ['star', 'follower'] : ['star'];
     for (const rail of rails) {
-      await executeBet(ctx, signal, rail, decision.outcome, decision.amountUsdc);
+      await executeBet(ctx, mandate, signal, rail, decision.outcome, decision.amountUsdc);
     }
-    addMatchSpent(matchKey, decision.amountUsdc * rails.length);
+    addMandateSpent(mandate, matchKey, decision.amountUsdc * rails.length);
   } catch (e) {
-    pushLog('system', 'error', `agent loop error: ${(e as Error).message}`);
+    pushLog('system', 'error', `[${mandate.id}] loop error: ${(e as Error).message}`);
   } finally {
-    inFlight = false;
+    inFlight.delete(mandate.id);
   }
 }
 
-async function executeBet(ctx: ChainContext, signal: MarketSignal, rail: 'star' | 'follower', outcome: 0 | 1, amountUsdc: number) {
+async function executeBet(ctx: ChainContext, mandate: Mandate, signal: MarketSignal, rail: 'star' | 'follower', outcome: 0 | 1, amountUsdc: number) {
   const { market } = signal;
   const amount = parseUnits(String(amountUsdc), 6);
-  const bettor = getBrowserDelegator() ?? ctx.userSmartAccount.address;
+  const browserMode = mandate.mode === 'browser' && Boolean(getBrowserRoot());
+  const bettor = (browserMode ? getBrowserDelegator() : ctx.userSmartAccount.address) ?? ctx.userSmartAccount.address;
   const entryOdds = outcome === 0 ? market.yesPrice : market.noPrice;
   const entryPriceE6 = BigInt(Math.min(990_000, Math.max(10_000, Math.round(entryOdds * 1e6))));
 
   const position: Position = {
     id: `pos-${++positionSeq}`,
-    marketId: -1, // assigned after the mirror market exists
+    marketId: -1,
     outcomeIndex: outcome,
-    agentId: getAgentConfig()?.agentId,
+    mandateId: mandate.id,
+    agentId: mandate.agentId,
+    agentLabel: mandate.agentLabel,
     bettor,
     marketName: market.question,
     polymarketUrl: market.polymarketUrl,
@@ -136,36 +149,25 @@ async function executeBet(ctx: ChainContext, signal: MarketSignal, rail: 'star' 
   upsertPosition(position);
 
   try {
-    // mirror market on Sepolia (lazy, operator-funded)
     const marketId = await ensureMirrorMarket(ctx, market.slug, market.question);
     position.marketId = marketId;
-    pushLog('contract', 'info', `mirror market #${marketId} ready for "${market.question.slice(0, 50)}…"`);
 
-    const chainLabel = getBrowserRoot()
-      ? 'ERC-7715 grant → AgentA → target (browser mode)'
-      : rail === 'star'
-        ? 'user → AgentA → target (2-hop)'
-        : 'user → AgentA → AgentB → target (3-hop)';
-    pushLog('relayer', 'info', `building ${chainLabel} bundle — ${amountUsdc} USDC on ${outcome === 0 ? 'YES' : 'NO'} @ $${entryOdds.toFixed(3)}`);
-
-    const intent = { marketId, outcome, amountUsdc: amount, entryPriceE6, bettor, viaFollower: rail === 'follower' } as const;
-    const { taskId, feeAmount } = await estimateAndSend(
-      (fee) => (getBrowserRoot() ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
-      parseUnits('0.01', 6),
-      { destinationUrl: webhookUrl ? `${webhookUrl}/api/relayer-webhook` : undefined, memo: position.id },
+    const intent = { marketId, outcome, amountUsdc: amount, entryPriceE6, bettor, mandateId: mandate.id, viaFollower: rail === 'follower' } as const;
+    // serialize redemptions from the same shared account to avoid 7702 conflicts
+    const { taskId, feeAmount } = await enqueueSend(bettor, () =>
+      estimateAndSend(
+        (fee) => (browserMode ? buildBrowserBetBundle(ctx, intent, fee) : buildBetBundle(ctx, intent, fee)),
+        parseUnits('0.01', 6),
+        { destinationUrl: webhookUrl ? `${webhookUrl}/api/relayer-webhook` : undefined, memo: position.id },
+      ),
     );
     position.taskId = taskId;
-    pushLog('relayer', 'success', `task ${taskId.slice(0, 18)}… submitted (fee ${formatUnits(feeAmount, 6)} USDC, gas: relayer-sponsored)`);
-
-    // always poll as a backstop — webhooks can be silent (tunnel down, or a
-    // pre-broadcast revert that never emits an event); poll catches terminal
-    // status either way. applyConfirmation is idempotent vs the webhook.
+    pushLog('relayer', 'success', `[${mandate.agentLabel ?? mandate.id}] task ${taskId.slice(0, 16)}… submitted (fee ${formatUnits(feeAmount, 6)} USDC, gas: relayer-sponsored)`);
     void pollUntilTerminal(ctx, taskId, position);
-    addSpent(amountUsdc);
   } catch (e) {
     position.status = 'FAILED';
     upsertPosition(position);
-    pushLog('relayer', 'error', `bundle rejected: ${(e as Error).message}`);
+    pushLog('relayer', 'error', `[${mandate.agentLabel ?? mandate.id}] bundle rejected: ${(e as Error).message}`);
   }
 }
 
@@ -181,7 +183,7 @@ async function pollUntilTerminal(ctx: ChainContext, taskId: string, position: Po
       if (st.status >= 400) {
         position.status = 'FAILED';
         upsertPosition(position);
-        pushLog('contract', 'error', `task ${taskId.slice(0, 18)}… failed (status ${st.status})`);
+        pushLog('contract', 'error', `task ${taskId.slice(0, 16)}… failed (status ${st.status})`);
         return;
       }
     } catch {
@@ -195,11 +197,7 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
   position.status = 'OPEN';
   position.txHash = txHash;
   upsertPosition(position);
-  pushLog(
-    'contract',
-    'success',
-    `budget transfer confirmed${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user native gas cost: 0)`,
-  );
+  pushLog('contract', 'success', `[${position.agentLabel ?? position.mandateId}] bet confirmed${txHash ? ` — https://sepolia.etherscan.io/tx/${txHash}` : ''} (user gas: 0)`);
   try {
     const recordTx = await recordBetDirect(ctx, {
       marketId: position.marketId,
@@ -210,7 +208,7 @@ export async function applyConfirmation(ctx: ChainContext, position: Position, t
     });
     position.recordTxHash = recordTx;
     upsertPosition(position);
-    pushLog('contract', 'success', `position recorded on mirror market #${position.marketId} — https://sepolia.etherscan.io/tx/${recordTx}`);
+    pushLog('contract', 'success', `[${position.agentLabel ?? position.mandateId}] recorded on mirror #${position.marketId} — https://sepolia.etherscan.io/tx/${recordTx}`);
   } catch (e) {
     pushLog('contract', 'error', `recordBet failed: ${(e as Error).message}`);
   }

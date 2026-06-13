@@ -22,15 +22,19 @@ import { verifyWebhook, type WebhookBody } from './relayer';
 import { startPolymarketFeed, getBoard, injectDislocation, marketSignals, type MarketSignal, type BoardSnapshot } from './polymarket';
 import { readAgents, mintAgent, getAgent, rememberPrompt } from './agents';
 import {
-  getAgentConfig,
+  createMandate,
+  getAllMandates,
+  getActiveMandates,
+  getMandate,
   getPositions,
   pushBoard,
   pushLog,
-  setAgentActive,
-  setAgentConfig,
   snapshot,
   sseSubscribe,
   sseUnsubscribe,
+  stopAllMandates,
+  stopMandate,
+  type MandateConfig,
 } from './state';
 
 loadEnv({ path: '.env.local' });
@@ -155,11 +159,13 @@ app.post('/api/agents/mint', async (req, res) => {
   }
 });
 
-// --- Mandate (running instance) ---
+// --- Mandates (concurrent running instances) ---
+
+// the config being assembled in the Studio, consumed by activate
+let pendingConfig: MandateConfig | undefined;
 
 app.post('/api/agents', async (req, res) => {
   const b = req.body ?? {};
-  // if a mandate references an NFA brain, resolve model/prompt from the registry
   let agentId: number | undefined;
   let agentLabel: string | undefined;
   let modelId = String(b.modelId ?? 'venice-llama3-70b');
@@ -173,11 +179,10 @@ app.post('/api/agents', async (req, res) => {
     agentId = brain.tokenId;
     agentLabel = brain.label;
     modelId = brain.model;
-    // prompt from registry unless the client re-supplied one (and remember it)
     prompt = prompt || brain.prompt;
     rememberPrompt(brain.tokenId, prompt);
   }
-  setAgentConfig({
+  pendingConfig = {
     agentId,
     agentLabel,
     modelId,
@@ -186,31 +191,28 @@ app.post('/api/agents', async (req, res) => {
     maxDailyAllowance: Number(b.maxDailyAllowance ?? 20),
     expiryDate: String(b.expiryDate ?? '2026-07-19'),
     copyTrade: Boolean(b.copyTrade ?? false),
-  });
-  pushLog('system', 'success', `mandate saved — ${agentLabel ? `agent "${agentLabel}" (NFA #${agentId})` : `model=${modelId}`} · perMatch=$${b.maxSpendPerMatch} daily=$${b.maxDailyAllowance}`);
+  };
   res.json({ ok: true });
 });
 
 app.post('/api/agents/activate', async (req, res) => {
   try {
-    const cfg = getAgentConfig();
+    const cfg = pendingConfig;
     if (!cfg) {
-      res.status(400).json({ ok: false, error: 'save agent config first' });
+      res.status(400).json({ ok: false, error: 'configure an agent first' });
       return;
     }
-    const mode = (req.body?.mode as string) ?? 'headless';
-    // who is about to run this mandate
+    const mode = (req.body?.mode as string) === 'browser' ? 'browser' : 'headless';
     const runner = (mode === 'browser' ? getBrowserDelegator() : ctx.userSmartAccount.address) ?? ctx.userSmartAccount.address;
 
     // gated execution: a private (non-copyable) agent can only be run by its owner
     if (cfg.agentId !== undefined) {
       const brain = await getAgent(cfg.agentId);
       if (brain && !brain.copyable && runner.toLowerCase() !== brain.owner.toLowerCase()) {
-        pushLog('guardrail', 'error', `BLOCKED: AgentNFA #${cfg.agentId} "${brain.label}" is private — only its owner (${brain.owner.slice(0, 10)}…) can run it`);
+        pushLog('guardrail', 'error', `BLOCKED: AgentNFA #${cfg.agentId} "${brain.label}" is private — only its owner can run it`);
         res.status(403).json({ ok: false, error: `Agent #${cfg.agentId} is private (gated to its owner). Pick a public agent or mint your own.` });
         return;
       }
-      if (brain) pushLog('guardrail', 'success', `gate check OK — AgentNFA #${cfg.agentId} is ${brain.copyable ? 'public' : 'owner-run'} (runner ${runner.slice(0, 10)}…)`);
     }
 
     if (mode === 'browser') {
@@ -219,24 +221,35 @@ app.post('/api/agents/activate', async (req, res) => {
         res.status(400).json({ ok: false, error: 'permissionContext required for browser mode' });
         return;
       }
-      const decoded = decodeDelegations(context);
-      setBrowserRoot(decoded);
-      pushLog('guardrail', 'success', `ERC-7715 permission received — delegate=${decoded[0]?.delegate?.slice(0, 10)}… caveats=${decoded[0]?.caveats?.length}`);
-    } else {
-      const root = await getHeadlessRoot(ctx);
-      pushLog('guardrail', 'success', `headless session delegation signed by user smart account (${root.caveats.length} caveat(s): USDC transfer budget, 30 USDC ceiling)`);
+      setBrowserRoot(decodeDelegations(context));
     }
-    setAgentActive(true);
-    pushLog('system', 'success', 'agent ACTIVE — scanning the Polymarket board; hands off the keyboard 🎬');
-    res.json({ ok: true });
+
+    const mandate = createMandate(cfg, mode);
+    if (mode === 'headless') await getHeadlessRoot(ctx, mandate.id); // pre-sign this mandate's root
+    pushLog(
+      'system',
+      'success',
+      `▶ mandate ${mandate.id} ACTIVE — ${cfg.agentLabel ? `agent "${cfg.agentLabel}" (NFA #${cfg.agentId})` : `model ${cfg.modelId}`} · ${mode} · perMatch $${cfg.maxSpendPerMatch} · daily $${cfg.maxDailyAllowance} · now ${getActiveMandates().length} running`,
+    );
+    res.json({ ok: true, mandateId: mandate.id });
   } catch (e) {
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
 
+app.get('/api/mandates', (_req, res) => {
+  res.json(snapshot().mandates);
+});
+
+app.post('/api/mandates/:id/stop', (req, res) => {
+  const ok = stopMandate(req.params.id);
+  if (ok) pushLog('system', 'warning', `■ mandate ${req.params.id} stopped — ${getActiveMandates().length} still running`);
+  res.status(ok ? 200 : 404).json({ ok });
+});
+
 app.post('/api/agents/deactivate', (_req, res) => {
-  setAgentActive(false);
-  pushLog('system', 'warning', 'agent deactivated (loop stopped). On-chain revocation: disable the permission in MetaMask → wallet revokes the delegation.');
+  stopAllMandates();
+  pushLog('system', 'warning', 'all mandates stopped. On-chain revocation: disable the permission in MetaMask.');
   res.json({ ok: true });
 });
 
