@@ -148,6 +148,24 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
         </div>
       )}
 
+      {/* No mandates yet — explicit empty state so the panel never just vanishes */}
+      {(state?.mandates?.length ?? 0) === 0 && (
+        <div className={`${t.cardBg} !p-4`}>
+          <div className="flex items-center gap-1.5 border-b pb-2 mb-3 border-current/10">
+            <Layers className="w-4 h-4 text-purple-600" />
+            <h4 className="text-xs font-bold uppercase tracking-wider">Running Agents (concurrent mandates)</h4>
+            <span className="text-[10px] opacity-50 font-mono ml-auto">none yet</span>
+          </div>
+          <div className="border-2 border-dashed border-stone-950/30 rounded-none p-6 text-center">
+            <div className="text-[11px] font-bold opacity-70">No agents running yet</div>
+            <div className="text-[10px] opacity-50 font-mono mt-1 max-w-sm mx-auto leading-relaxed">
+              Mint or pick an agent in the Studio, set guardrails, then sign the ERC-7715 grant to launch one. Its
+              mandate, positions, and live telemetry will appear here.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Stats Widgets */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className={`${t.cardBg} flex items-center gap-3.5 !p-4`}>
