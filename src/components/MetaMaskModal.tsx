@@ -172,6 +172,7 @@ export default function MetaMaskModal({ isOpen, onClose, onApprove, config, copy
             </div>
 
             <div className="grid grid-cols-1 gap-2">
+              {/* primary, self-custodial path */}
               <button
                 type="button"
                 onClick={handleMetaMask}
@@ -179,18 +180,27 @@ export default function MetaMaskModal({ isOpen, onClose, onApprove, config, copy
               >
                 <span>🦊</span> Sign with MetaMask (ERC-7715)
               </button>
-              <button
-                type="button"
-                onClick={handleHeadless}
-                className="py-2.5 px-4 text-xs font-bold cursor-pointer bg-white hover:bg-stone-50 border-2 border-stone-950 text-stone-950 rounded-none flex items-center justify-center gap-2"
-                title="Server-held test key signs the session delegation — same on-chain rails, no wallet popup"
-              >
-                <FlaskConical className="w-3.5 h-3.5" /> Headless Demo Mode
-              </button>
+              <p className="text-[9px] opacity-55 text-center -mt-0.5 font-mono">recommended · you keep custody, the agent runs under your signed grant</p>
+
+              {/* secondary, clearly-labeled simulation path */}
+              <div className="border-t border-dashed border-current/20 mt-1 pt-2">
+                <button
+                  type="button"
+                  onClick={handleHeadless}
+                  className="w-full py-2 px-4 text-[11px] font-bold cursor-pointer bg-white hover:bg-stone-50 border-2 border-stone-950 text-stone-950 rounded-none flex items-center justify-center gap-2 opacity-80"
+                  title="Runs the agent with a server-held test key — same on-chain rails, no wallet popup. For quick demos / automated testing. Not self-custodial."
+                >
+                  <FlaskConical className="w-3.5 h-3.5" /> Simulation mode (no wallet)
+                </button>
+                <p className="text-[9px] opacity-50 text-center mt-1 font-mono leading-snug">
+                  server-held test key · same on-chain rails, no popup · for demos &amp; CI — not self-custodial
+                </p>
+              </div>
+
               <button
                 type="button"
                 onClick={onClose}
-                className="py-2 px-4 text-xs font-semibold cursor-pointer border-2 border-stone-950 bg-white hover:bg-stone-50 rounded-none text-stone-950 opacity-70"
+                className="py-2 px-4 text-xs font-semibold cursor-pointer border-2 border-stone-950 bg-white hover:bg-stone-50 rounded-none text-stone-950 opacity-70 mt-1"
               >
                 Reject
               </button>
