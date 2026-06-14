@@ -1,0 +1,36 @@
+# Render Blueprint — PolyForge single-service deploy.
+#
+# One Node web service runs the Express backend, which serves:
+#   • the built React SPA (dist/)        — same origin, so relative /api works
+#   • the JSON API + /api/telemetry SSE  — no CORS, no proxy
+#   • the 1Shot relayer webhook          — target = RENDER_EXTERNAL_URL (auto)
+#
+# Render auto-provides PORT and RENDER_EXTERNAL_URL. The 4 secrets below are
+# NOT stored here — set them in the dashboard:
+#   Dashboard → polyforge → Environment → add SPIKE_*_PK and VENICE_API_KEY.
+services:
+  - type: web
+    name: polyforge
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      # ---- non-secret config (safe to commit) ----
+      - key: WEBHOOK_TUNNEL
+        value: "0"                 # no cloudflared in prod; uses RENDER_EXTERNAL_URL
+      - key: SEPOLIA_RPC
+        value: https://ethereum-sepolia-rpc.publicnode.com
+      - key: MARKET_ADDRESS
+        value: "0xF1EE83A565d4F4007028de3C5E29b01FfAD64476"
+      - key: AGENT_NFA_ADDRESS
+        value: "0xB0Bf71Bd0AA1c73e649b0f482229d135B95107d0"
+      # ---- secrets: set these in the Render dashboard, never commit ----
+      - key: SPIKE_USER_PK
+        sync: false
+      - key: SPIKE_AGENT_A_PK
+        sync: false
+      - key: SPIKE_AGENT_B_PK
+        sync: false
+      - key: VENICE_API_KEY
+        sync: false

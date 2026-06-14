@@ -12,6 +12,9 @@
  *   GET  /api/health             chain context + relayer caps + feed
  */
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import express from 'express';
 import { config as loadEnv } from 'dotenv';
 import { erc20Abi, formatUnits } from 'viem';
@@ -285,9 +288,30 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+// ---------- static frontend (single-service production) ----------
+// In prod the built SPA is served from the same origin as the API, so the
+// frontend's relative `/api` calls and the `/api/telemetry` SSE stream just
+// work — no CORS, no proxy, no second service. Mounted only when a build
+// exists, so local dev (vite on :3000) is unaffected.
+const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
+if (existsSync(path.join(distDir, 'index.html'))) {
+  app.use(express.static(distDir));
+  // SPA fallback: any non-API GET returns index.html for client-side routing
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api')) {
+      res.sendFile(path.join(distDir, 'index.html'));
+      return;
+    }
+    next();
+  });
+}
+
 // ---------- boot ----------
 async function startTunnel(): Promise<string | undefined> {
   if (process.env.WEBHOOK_PUBLIC_URL) return process.env.WEBHOOK_PUBLIC_URL;
+  // Render (and most PaaS) expose the service's own public URL — use it directly
+  // as the relayer webhook target so no cloudflared tunnel is needed in prod.
+  if (process.env.RENDER_EXTERNAL_URL) return process.env.RENDER_EXTERNAL_URL;
   if (process.env.WEBHOOK_TUNNEL === '0') return undefined;
   try {
     const proc = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`, '--no-autoupdate'], {

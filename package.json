@@ -10,6 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "server": "NODE_USE_ENV_PROXY=1 tsx server/index.ts",
+    "start": "tsx server/index.ts",
     "compile:contracts": "tsx scripts/compile.ts",
     "deploy:market": "tsx scripts/deploy-market.ts",
     "deploy:nfa": "NODE_USE_ENV_PROXY=1 tsx scripts/deploy-nfa.ts"
@@ -25,6 +26,7 @@
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "tsx": "^4.21.0",
     "viem": "^2.52.2",
     "vite": "^6.2.3"
   },
@@ -35,8 +37,10 @@
     "esbuild": "^0.25.0",
     "solc": "^0.8.24",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
