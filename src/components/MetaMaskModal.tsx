@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Calendar, Key, AlertCircle, RefreshCw, Bot, FlaskConical } from 'lucide-react';
 import { AgentConfig, StyleId } from '../types';
 import { api, type ServerState } from '../lib/api';
-import { connectWallet, ensureSepolia, requestAgentPermission } from '../lib/wallet';
+import { connectWallet, ensureSepolia, requestAgentPermission, getConnectedAccount } from '../lib/wallet';
 
 interface MetaMaskModalProps {
   isOpen: boolean;
@@ -49,7 +49,7 @@ export default function MetaMaskModal({ isOpen, onClose, onApprove, config, copy
     try {
       if (!server?.agentA || !server?.usdc) throw new Error('PolyForge server unreachable — run `npm run server`');
       await saveConfig();
-      await connectWallet();
+      const owner = await connectWallet();
       await ensureSepolia();
       const context = await requestAgentPermission({
         agentA: server.agentA as `0x${string}`,
@@ -58,7 +58,7 @@ export default function MetaMaskModal({ isOpen, onClose, onApprove, config, copy
         expiryDate: config.expiryDate,
         justification: `PolyForge betting agent — daily budget $${config.maxDailyAllowance} USDC, expires ${config.expiryDate}`,
       });
-      await api.activateBrowser(context);
+      await api.activateBrowser(context, owner);
       setStep('success');
       setTimeout(onApprove, 1200);
     } catch (e) {
@@ -71,7 +71,8 @@ export default function MetaMaskModal({ isOpen, onClose, onApprove, config, copy
     setStep('signing');
     try {
       await saveConfig();
-      await api.activateHeadless();
+      const owner = await getConnectedAccount(); // tag with the connected wallet if any (else global)
+      await api.activateHeadless(owner ?? undefined);
       setStep('success');
       setTimeout(onApprove, 1200);
     } catch (e) {

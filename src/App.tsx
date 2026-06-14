@@ -483,12 +483,13 @@ export default function App() {
           </div>
         ) : (
           /* Active Telemetry Simulation State */
-          <ActiveConsole 
-            config={config} 
+          <ActiveConsole
+            config={config}
             onBackToStudio={() => {
               setActiveTab2('launchpad');
-            }} 
-            styleId={styleId} 
+            }}
+            styleId={styleId}
+            walletAddress={walletAddress}
           />
         )}
 

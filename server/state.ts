@@ -56,6 +56,7 @@ export type MandateConfig = {
 export type Mandate = MandateConfig & {
   id: string;
   mode: 'headless' | 'browser';
+  owner?: string; // connecting wallet (EOA, lowercased) that launched this mandate; scopes the Active Ledger per-wallet
   active: boolean;
   spentToday: number;
   spentPerMatch: Map<string, number>;
@@ -115,11 +116,12 @@ export function pushBoard(board: BoardSnapshot) {
 
 // ---------- Mandates ----------
 
-export function createMandate(cfg: MandateConfig, mode: 'headless' | 'browser'): Mandate {
+export function createMandate(cfg: MandateConfig, mode: 'headless' | 'browser', owner?: string): Mandate {
   const m: Mandate = {
     ...cfg,
     id: `m-${++mandateSeq}`,
     mode,
+    owner: owner?.toLowerCase(),
     active: true,
     spentToday: 0,
     spentPerMatch: new Map(),
@@ -191,6 +193,7 @@ function mandateView(m: Mandate) {
     agentLabel: m.agentLabel,
     modelId: m.modelId,
     mode: m.mode,
+    owner: m.owner,
     active: m.active,
     maxSpendPerMatch: m.maxSpendPerMatch,
     maxDailyAllowance: m.maxDailyAllowance,

@@ -56,6 +56,7 @@ export type MandateView = {
   agentLabel?: string;
   modelId: string;
   mode: 'headless' | 'browser';
+  owner?: string; // connecting wallet (EOA, lowercased) that launched it
   active: boolean;
   maxSpendPerMatch: number;
   maxDailyAllowance: number;
@@ -121,8 +122,9 @@ export const api = {
     const res = await fetch('/api/agents/registry');
     return (await res.json()) as AgentNFAEntry[];
   },
-  activateHeadless: () => post('/api/agents/activate', { mode: 'headless' }),
-  activateBrowser: (permissionContext: string) => post('/api/agents/activate', { mode: 'browser', permissionContext }),
+  activateHeadless: (owner?: string) => post('/api/agents/activate', { mode: 'headless', owner }),
+  activateBrowser: (permissionContext: string, owner?: string) =>
+    post('/api/agents/activate', { mode: 'browser', permissionContext, owner }),
   deactivate: () => post('/api/agents/deactivate'),
   stopMandate: (id: string) => post(`/api/mandates/${id}/stop`),
   injectDislocation: (slug: string) => post('/api/markets/inject', { slug }),

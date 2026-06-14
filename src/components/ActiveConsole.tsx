@@ -13,9 +13,10 @@ interface ActiveConsoleProps {
   config: AgentConfig;
   onBackToStudio: () => void;
   styleId: StyleId;
+  walletAddress?: string | null;
 }
 
-export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsoleProps) {
+export default function ActiveConsole({ onBackToStudio, styleId, walletAddress }: ActiveConsoleProps) {
   const { logs, board, state, connected } = useTelemetry();
   const [hiddenBefore, setHiddenBefore] = useState(0);
   const [injecting, setInjecting] = useState<string | null>(null);
@@ -23,14 +24,33 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const t = THEME_PRESETS[styleId];
-  // clicking a running agent filters positions + telemetry to that mandate;
+
+  // Per-wallet scope: with a wallet connected, the Active Ledger shows only the
+  // mandates that wallet launched (matched on the connecting EOA, lowercased on
+  // the server). With no wallet connected it falls back to the global view.
+  const wallet = walletAddress?.toLowerCase() ?? null;
+  const allMandates = state?.mandates ?? [];
+  const myMandates = wallet ? allMandates.filter((m) => m.owner === wallet) : allMandates;
+  const myMandateIds = new Set(myMandates.map((m) => m.id));
+  const myActiveCount = myMandates.filter((m) => m.active).length;
+
+  // clicking a running agent further filters positions + telemetry to that mandate;
   // system/market logs (no mandateId) stay as shared context
-  const allPositions = state?.positions ?? [];
+  const allPositions = wallet
+    ? (state?.positions ?? []).filter((p) => p.mandateId != null && myMandateIds.has(p.mandateId))
+    : state?.positions ?? [];
   const positions = selectedMandate ? allPositions.filter((p) => p.mandateId === selectedMandate) : allPositions;
-  const visibleLogs = logs
-    .slice(hiddenBefore)
-    .filter((l) => !selectedMandate || !l.mandateId || l.mandateId === selectedMandate);
-  const selectedLabel = state?.mandates?.find((m) => m.id === selectedMandate)?.agentLabel ?? selectedMandate;
+  const visibleLogs = logs.slice(hiddenBefore).filter((l) => {
+    if (selectedMandate) return !l.mandateId || l.mandateId === selectedMandate;
+    if (!wallet) return true;
+    return !l.mandateId || myMandateIds.has(l.mandateId); // agent logs scoped to my mandates; shared logs always show
+  });
+  const selectedLabel = myMandates.find((m) => m.id === selectedMandate)?.agentLabel ?? selectedMandate;
+
+  // a wallet switch invalidates any per-agent filter
+  useEffect(() => {
+    setSelectedMandate(null);
+  }, [wallet]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -61,22 +81,22 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
         <div className="flex items-center gap-3">
           <div
             className={`flex items-center gap-1.5 py-1 px-3.5 text-[11px] font-mono font-bold border rounded-none border-stone-950 text-stone-950 ${
-              (state?.activeCount ?? 0) > 0 ? 'bg-[#a7f3d0] animate-pulse' : 'bg-stone-200'
+              myActiveCount > 0 ? 'bg-[#a7f3d0] animate-pulse' : 'bg-stone-200'
             }`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-            {(state?.activeCount ?? 0) > 0
-              ? `${state?.activeCount} AGENT${state?.activeCount === 1 ? '' : 'S'} RUNNING`
+            {myActiveCount > 0
+              ? `${myActiveCount} AGENT${myActiveCount === 1 ? '' : 'S'} RUNNING`
               : connected
                 ? 'idle — launch an agent in the Studio'
                 : 'server offline'}
           </div>
 
-          {(state?.activeCount ?? 0) > 0 && (
+          {myActiveCount > 0 && (
             <button
               type="button"
-              onClick={() => void api.deactivate()}
-              title="Stop ALL mandates. On-chain: revoke the permission in MetaMask."
+              onClick={() => myMandates.filter((m) => m.active).forEach((m) => void api.stopMandate(m.id))}
+              title="Stop your running mandates. On-chain: revoke the permission in MetaMask."
               className="flex items-center gap-1.5 p-1.5 px-3 text-[11px] font-bold transition-all outline-none bg-rose-200 hover:bg-rose-300 border-2 border-stone-950 text-stone-950 rounded-none shadow-[2px_2px_0px_#000]"
             >
               <Power className="w-3.5 h-3.5" /> Stop All
@@ -85,14 +105,15 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
         </div>
       </div>
 
-      {/* Active Mandates — concurrent agents */}
-      {(state?.mandates?.length ?? 0) > 0 && (
+      {/* Active Mandates — concurrent agents (scoped to the connected wallet) */}
+      {myMandates.length > 0 && (
         <div className={`${t.cardBg} !p-4`}>
           <div className="flex items-center gap-1.5 border-b pb-2 mb-3 border-current/10">
             <Layers className="w-4 h-4 text-purple-600" />
             <h4 className="text-xs font-bold uppercase tracking-wider">Running Agents (concurrent mandates)</h4>
             <span className="text-[10px] opacity-50 font-mono ml-auto">
-              {selectedMandate ? 'click again / All to clear filter' : 'click an agent to focus'} · {state?.activeCount} active
+              {selectedMandate ? 'click again / All to clear filter' : 'click an agent to focus'} · {myActiveCount} active
+              {wallet && ` · ${wallet.slice(0, 6)}…${wallet.slice(-4)}`}
             </span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
@@ -105,7 +126,7 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
               <div className="font-bold text-[11px] flex items-center gap-1.5">📊 All agents</div>
               <div className="text-[9px] opacity-60 font-mono mt-1">{allPositions.length} positions · combined view</div>
             </button>
-            {state!.mandates.map((m) => {
+            {myMandates.map((m) => {
               const sel = selectedMandate === m.id;
               return (
                 <div
@@ -148,8 +169,8 @@ export default function ActiveConsole({ onBackToStudio, styleId }: ActiveConsole
         </div>
       )}
 
-      {/* No mandates yet — explicit empty state so the panel never just vanishes */}
-      {(state?.mandates?.length ?? 0) === 0 && (
+      {/* No mandates for this wallet — explicit empty state so the panel never just vanishes */}
+      {myMandates.length === 0 && (
         <div className={`${t.cardBg} !p-4`}>
           <div className="flex items-center gap-1.5 border-b pb-2 mb-3 border-current/10">
             <Layers className="w-4 h-4 text-purple-600" />

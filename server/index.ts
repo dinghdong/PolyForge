@@ -227,7 +227,9 @@ app.post('/api/agents/activate', async (req, res) => {
       setBrowserRoot(decodeDelegations(context));
     }
 
-    const mandate = createMandate(cfg, mode);
+    // the connecting wallet (EOA) that launched this mandate — scopes the Active Ledger per-wallet
+    const owner = typeof req.body?.owner === 'string' ? (req.body.owner as string) : undefined;
+    const mandate = createMandate(cfg, mode, owner);
     if (mode === 'headless') await getHeadlessRoot(ctx, mandate.id); // pre-sign this mandate's root
     pushLog(
       'system',
